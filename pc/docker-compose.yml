@@ -1,0 +1,122 @@
+# 쫑팔이삼촌 — PC 파이프라인
+#
+# 컨테이너:
+#   postgres        : 데이터 저장
+#   postgrest       : 폰 ↔ PC REST 자동 입구
+#   auth-service    : 로그인 / 재발급 / 로그아웃
+#   upload-receiver : 통화 파일 받기
+#   whisper-worker  : 음성 → 텍스트 (faster-whisper, large-v3)
+#   fcm-pusher      : 새 요약 / 새 할 일 시 파이어베이스 푸시 (트리거만, 본문 X)
+#   nginx           : 외부 입구 라우팅
+#
+# 에이전트 워커 (Claude Code 헤드리스 호출) 는 호스트 systemd. docker compose 밖.
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.0
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: jjongpal_anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_PRE_REQUEST: public.set_app_context
+      PGRST_OPENAPI_SERVER_PROXY_URI: ${PUBLIC_BASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  auth-service:
+    build: ./auth-service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      ACCESS_TOKEN_TTL_SEC: ${ACCESS_TOKEN_TTL_SEC}
+      REFRESH_TOKEN_TTL_SEC: ${REFRESH_TOKEN_TTL_SEC}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  upload-receiver:
+    build: ./upload-receiver
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      STORAGE_ROOT: /storage
+    volumes:
+      - ${STORAGE_ROOT}:/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8002:8000"
+
+  whisper-worker:
+    build: ./whisper-worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      STORAGE_ROOT: /storage
+      WHISPER_MODEL: ${WHISPER_MODEL}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE}
+      WHISPER_DEVICE: ${WHISPER_DEVICE}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE}
+    volumes:
+      - ${STORAGE_ROOT}:/storage
+      - ./whisper-worker/models:/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  fcm-pusher:
+    build: ./fcm-pusher
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_CREDENTIALS: /secrets/service-account.json
+    volumes:
+      - ./fcm-pusher/service-account.json:/secrets/service-account.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - postgrest
+      - auth-service
+      - upload-receiver
+
+# 외부 노출은 클라우드플레어 터널 (호스트 systemd) 이 127.0.0.1:8080 앞에 붙음.
