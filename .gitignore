@@ -1,0 +1,41 @@
+# --- 안드로이드 ---
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+.kotlin/
+app/build/
+app/keystore/
+app/google-services.json
+app/release/
+
+# --- PC 백엔드 ---
+pc/.env
+pc/postgres/data/
+pc/whisper-worker/models/
+pc/fcm-pusher/service-account.json
+pc/cloudflared/*.json
+
+# --- 로그·캐시 ---
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- 운영 ---
+docs/dev-log/*.md
+!docs/dev-log/.gitkeep
+
+# --- 임시 ---
+*.tmp
+*~
+*.swp
