@@ -1,0 +1,9 @@
+# ~/.cloudflared/config.yml 로 복사 후 ${...} 부분 본인 값으로 수정
+
+tunnel: jjongpal
+credentials-file: /home/${USER}/.cloudflared/${TUNNEL_ID}.json
+
+ingress:
+  - hostname: ${DOMAIN}                    # 예: samchon.uncle-jongpal.com
+    service: http://localhost:8080         # 도커 컴포즈의 nginx
+  - service: http_status:404

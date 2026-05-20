@@ -1,0 +1,27 @@
+[Unit]
+Description=jjongpal-app Agent Worker (Claude Code 헤드리스 호출)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+
+# 작업 디렉토리 + 가상환경 + nvm 경로
+WorkingDirectory=/home/%i/work/dev/jjongpal-app/pc/agent-worker
+Environment=PATH=/home/%i/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/home/%i/work/dev/jjongpal-app/pc/agent-worker/.env
+
+# DATABASE_URL 은 호스트의 도커 컴포즈 노출 포트 (127.0.0.1:5432) 사용
+# Environment=DATABASE_URL=postgres://jjongpal:...@127.0.0.1:5432/jjongpal
+
+# 가상환경 파이썬 사용 (`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`)
+ExecStart=/home/%i/work/dev/jjongpal-app/pc/agent-worker/.venv/bin/python worker.py
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
