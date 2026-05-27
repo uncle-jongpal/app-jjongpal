@@ -26,7 +26,8 @@ BEGIN
     END IF;
 
     uid_text  := claims ->> 'user_id';
-    role_text := COALESCE(claims ->> 'role', 'user');
+    -- 애플리케이션 역할은 'app_role' 클레임에 박힘 ('role' 은 포스트그레큐엘 역할명)
+    role_text := COALESCE(claims ->> 'app_role', 'user');
 
     PERFORM set_config('app.user_id', COALESCE(uid_text, ''), true);
     PERFORM set_config('app.user_role', role_text, true);

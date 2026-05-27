@@ -4,18 +4,12 @@
 이유: 클로드 코드 (Claude Code, 명령줄 도구) 가 본인 PC 호스트에 로컬 로그인됨.
 컨테이너 안에서 호출하려면 인증 마운트 필요. 호스트에 두는 게 깔끔.
 
-흐름:
-1. transcripts.summary_status='PENDING' 폴링
-2. PROCESSING 마킹
-3. 프롬프트 파일 (`prompts/call_summarize.md`) 의 sha256 해시 계산 →
-   prompt_versions 에 없으면 INSERT.
-4. `claude --print --output-format json` 호출 + 표준 입력으로 프롬프트 + transcript 전달
-5. 응답에서 `result` 필드 (모델 본문) 추출 → JSON 파싱
-6. summaries 행 INSERT + todos / appointments 분해 INSERT
-7. transcripts.summary_status='DONE' + processed_at=NOW
-8. transcript_processing_log OK 기록
+처리 흐름 2가지:
 
-실패 시 status='FAILED' + error_message + 로그 FAILED.
+1. 통화 (transcripts.summary_status='PENDING') → call_summarize 프롬프트 → 요약 + 할 일 + 약속
+2. 알림 (events.type='notification' AND processing_status='PENDING') → notification_classify 프롬프트 → 할 일 + 약속
+
+둘 다 한 워커가 번갈아 처리. 실패 시 재시도 한도 안에서.
 """
 
 import asyncio
@@ -40,6 +34,19 @@ CLAUDE_TIMEOUT_SEC = int(os.environ.get("CLAUDE_TIMEOUT_SEC", "300"))
 POLL_INTERVAL_SEC = int(os.environ.get("AGENT_POLL_INTERVAL_SEC", "10"))
 BATCH_SIZE = int(os.environ.get("AGENT_BATCH_SIZE", "3"))
 CALL_GAP_SEC = float(os.environ.get("AGENT_CALL_GAP_SEC", "2.0"))
+
+# 시스템 / 잡음 패키지 — 분류 대상에서 제외 (SKIPPED 처리)
+SKIP_PACKAGES = {
+    "android",
+    "com.android.systemui",
+    "com.android.settings",
+    "com.android.providers.media",
+    "com.samsung.android.app.notes.sync",
+    "com.samsung.android.bixby.agent",
+    "com.google.android.gms",
+    "com.google.android.apps.messaging.notifications",
+    "app.jongpal.jjongpal",
+}
 
 
 def load_prompt(name: str) -> Tuple[str, str]:
@@ -94,8 +101,6 @@ async def run_claude(prompt: str) -> dict:
 
 
 def extract_model_text(claude_out: dict) -> str:
-    # claude --print --output-format json 응답 형식:
-    # {"type":"result","subtype":"success","is_error":false,"result":"<본문>", ...}
     if claude_out.get("is_error"):
         raise RuntimeError(f"claude error: {claude_out.get('subtype')}/{claude_out.get('result')}")
     result = claude_out.get("result")
@@ -105,10 +110,8 @@ def extract_model_text(claude_out: dict) -> str:
 
 
 def parse_model_json(text: str) -> dict:
-    # 마크다운 코드 펜스 들어와도 깎아내기
     t = text.strip()
     if t.startswith("```"):
-        # 첫 줄 (```json 또는 ```) 제거 + 끝의 ``` 제거
         first_newline = t.find("\n")
         if first_newline > 0:
             t = t[first_newline + 1:]
@@ -118,14 +121,90 @@ def parse_model_json(text: str) -> dict:
     return json.loads(t)
 
 
-def parse_iso8601(s: Optional[str]) -> Optional[str]:
-    # 그대로 통과시킴 — Postgres TIMESTAMPTZ 가 ISO 8601 받음. 빈 값은 NULL.
+def parse_iso8601(s: Optional[str]):
+    """ISO 8601 문자열을 datetime 으로 변환. asyncpg 가 timestamptz 컬럼에 문자열 거부함."""
     if not s or not isinstance(s, str):
         return None
-    return s.strip() or None
+    s = s.strip()
+    if not s:
+        return None
+    # 'Z' 접미사 → '+00:00' 변환 (datetime.fromisoformat 호환성)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        from datetime import datetime as _dt
+        return _dt.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
 
 
-async def process_one(conn: asyncpg.Connection, row: asyncpg.Record, prompt_version_id: int, prompt_body: str) -> None:
+async def insert_todos_and_appts(
+    conn: asyncpg.Connection,
+    user_id: int,
+    source_event_id: Optional[str],
+    source: str,                      # 'call' or 'notification'
+    todos: list,
+    appts: list,
+) -> Tuple[int, int]:
+    todo_count = 0
+    appt_count = 0
+    for t in todos:
+        if not isinstance(t, dict):
+            continue
+        content = (t.get("content") or "").strip()
+        if not content:
+            continue
+        content_safe = content[:500]
+
+        # 중복 방지: 같은 (user_id, content) 의 활성 (open) 할 일이 이미 있으면 INSERT 안 함.
+        existing = await conn.fetchval(
+            """
+            SELECT id FROM todos
+            WHERE user_id = $1 AND content = $2 AND status = 'open'
+            LIMIT 1
+            """,
+            user_id, content_safe,
+        )
+        if existing:
+            continue
+
+        await conn.execute(
+            """
+            INSERT INTO todos (id, user_id, content, source, source_event_id, related_person, status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'open')
+            ON CONFLICT (id) DO NOTHING
+            """,
+            str(uuid4()), user_id, content_safe, source, source_event_id,
+            (t.get("person") or None),
+        )
+        todo_count += 1
+
+    for a in appts:
+        if not isinstance(a, dict):
+            continue
+        title = (a.get("title") or "").strip()
+        start_at = parse_iso8601(a.get("start_at"))
+        if not title or not start_at:
+            continue
+        try:
+            confidence = float(a.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            confidence = 0.5
+        await conn.execute(
+            """
+            INSERT INTO appointments (user_id, source_event_id, title, start_at, end_at, location, with_person, confidence)
+            VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6, $7, $8)
+            """,
+            user_id, source_event_id, title[:200], start_at, parse_iso8601(a.get("end_at")),
+            (a.get("location") or None), (a.get("with") or None), max(0.0, min(1.0, confidence)),
+        )
+        appt_count += 1
+    return todo_count, appt_count
+
+
+# ===== 통화 transcript 처리 =====
+
+async def process_transcript(conn: asyncpg.Connection, row: asyncpg.Record, prompt_version_id: int, prompt_body: str) -> None:
     transcript_id = row["id"]
     text = row["text"]
     event_id = row["event_id"]
@@ -137,7 +216,7 @@ async def process_one(conn: asyncpg.Connection, row: asyncpg.Record, prompt_vers
         transcript_id,
     )
 
-    log.info(f"[{transcript_id}] start claude")
+    log.info(f"[transcript {transcript_id}] start claude")
 
     try:
         full_prompt = prompt_body.replace("{{TRANSCRIPT}}", text)
@@ -150,7 +229,7 @@ async def process_one(conn: asyncpg.Connection, row: asyncpg.Record, prompt_vers
         appts = parsed.get("appointments") or []
 
         async with conn.transaction():
-            summary_row = await conn.fetchrow(
+            await conn.fetchrow(
                 """
                 INSERT INTO summaries (transcript_id, event_id, user_id, summary, raw_json, prompt_version_id)
                 VALUES ($1, $2, $3, $4, $5, $6)
@@ -158,42 +237,9 @@ async def process_one(conn: asyncpg.Connection, row: asyncpg.Record, prompt_vers
                 """,
                 transcript_id, event_id, user_id, summary_text, json.dumps(parsed, ensure_ascii=False), prompt_version_id,
             )
-
-            for t in todos:
-                if not isinstance(t, dict):
-                    continue
-                content = (t.get("content") or "").strip()
-                if not content:
-                    continue
-                await conn.execute(
-                    """
-                    INSERT INTO todos (id, user_id, content, source, source_event_id, related_person, status)
-                    VALUES ($1, $2, $3, 'call', $4, $5, 'open')
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    str(uuid4()), user_id, content[:500], event_id,
-                    (t.get("person") or None),
-                )
-
-            for a in appts:
-                if not isinstance(a, dict):
-                    continue
-                title = (a.get("title") or "").strip()
-                start_at = parse_iso8601(a.get("start_at"))
-                if not title or not start_at:
-                    continue
-                try:
-                    confidence = float(a.get("confidence", 0.5))
-                except (TypeError, ValueError):
-                    confidence = 0.5
-                await conn.execute(
-                    """
-                    INSERT INTO appointments (user_id, source_event_id, title, start_at, end_at, location, with_person, confidence)
-                    VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6, $7, $8)
-                    """,
-                    user_id, event_id, title[:200], start_at, parse_iso8601(a.get("end_at")),
-                    (a.get("location") or None), (a.get("with") or None), max(0.0, min(1.0, confidence)),
-                )
+            todo_count, appt_count = await insert_todos_and_appts(
+                conn, user_id, event_id, "call", todos, appts,
+            )
 
             duration_ms = int((time.monotonic() - started) * 1000)
             await conn.execute(
@@ -209,14 +255,14 @@ async def process_one(conn: asyncpg.Connection, row: asyncpg.Record, prompt_vers
             )
 
         log.info(
-            f"[{transcript_id}] done in {duration_ms} ms — "
-            f"summary {len(summary_text)} chars, {len(todos)} todos, {len(appts)} appts"
+            f"[transcript {transcript_id}] done in {duration_ms} ms — "
+            f"summary {len(summary_text)} chars, {todo_count} todos, {appt_count} appts"
         )
 
     except Exception as e:
         duration_ms = int((time.monotonic() - started) * 1000)
         err = str(e)[:1000]
-        log.exception(f"[{transcript_id}] FAILED: {err}")
+        log.exception(f"[transcript {transcript_id}] FAILED: {err}")
         await conn.execute(
             "UPDATE transcripts SET summary_status='FAILED', error_message=$1 WHERE id=$2",
             err, transcript_id,
@@ -230,8 +276,103 @@ async def process_one(conn: asyncpg.Connection, row: asyncpg.Record, prompt_vers
         )
 
 
+# ===== 알림 이벤트 처리 =====
+
+async def process_notification(conn: asyncpg.Connection, row: asyncpg.Record, prompt_version_id: int, prompt_body: str) -> None:
+    event_id = row["id"]
+    user_id = row["user_id"]
+    source_pkg = row["source_package"] or ""
+    title = row["title"] or ""
+    content = row["content"] or ""
+    timestamp = row["timestamp"]
+    started = time.monotonic()
+
+    # 빈 알림 / 시스템 알림 → SKIPPED
+    if (source_pkg in SKIP_PACKAGES) or (not title and not content):
+        await conn.execute(
+            "UPDATE events SET processing_status='SKIPPED', processed_at=NOW() WHERE id=$1",
+            event_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO event_processing_log (event_id, stage, status, message, duration_ms)
+            VALUES ($1, 'claude_classify', 'SKIPPED', $2, 0)
+            """,
+            event_id, f"package={source_pkg}",
+        )
+        return
+
+    await conn.execute(
+        "UPDATE events SET processing_status='PROCESSING' WHERE id=$1",
+        event_id,
+    )
+    log.info(f"[event {event_id}] start claude (pkg={source_pkg})")
+
+    try:
+        full_prompt = (
+            prompt_body
+            .replace("{{SOURCE_PACKAGE}}", source_pkg)
+            .replace("{{TITLE}}", title)
+            .replace("{{CONTENT}}", content[:1500])
+            .replace("{{TIMESTAMP}}", timestamp.isoformat())
+        )
+        claude_out = await run_claude(full_prompt)
+        model_text = extract_model_text(claude_out)
+        parsed = parse_model_json(model_text)
+
+        is_actionable = bool(parsed.get("is_actionable"))
+        todos = parsed.get("todos") or []
+        appts = parsed.get("appointments") or []
+
+        async with conn.transaction():
+            if is_actionable and (todos or appts):
+                todo_count, appt_count = await insert_todos_and_appts(
+                    conn, user_id, event_id, "notification", todos, appts,
+                )
+            else:
+                todo_count = appt_count = 0
+
+            duration_ms = int((time.monotonic() - started) * 1000)
+            await conn.execute(
+                "UPDATE events SET processing_status='DONE', processed_at=NOW(), processing_error=NULL WHERE id=$1",
+                event_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO event_processing_log
+                    (event_id, stage, status, duration_ms, prompt_version_id, todos_extracted, appointments_extracted)
+                VALUES ($1, 'claude_classify', 'OK', $2, $3, $4, $5)
+                """,
+                event_id, duration_ms, prompt_version_id, todo_count, appt_count,
+            )
+
+        log.info(
+            f"[event {event_id}] done in {duration_ms} ms — "
+            f"actionable={is_actionable}, {todo_count} todos, {appt_count} appts"
+        )
+
+    except Exception as e:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        err = str(e)[:1000]
+        log.exception(f"[event {event_id}] FAILED: {err}")
+        await conn.execute(
+            "UPDATE events SET processing_status='FAILED', processing_error=$1 WHERE id=$2",
+            err, event_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO event_processing_log (event_id, stage, status, message, duration_ms, prompt_version_id)
+            VALUES ($1, 'claude_classify', 'FAILED', $2, $3, $4)
+            """,
+            event_id, err, duration_ms, prompt_version_id,
+        )
+
+
+# ===== 메인 루프 =====
+
 async def main() -> None:
-    log.info("agent-worker 시작 (호스트 systemd)")
+    log.info("agent-worker 시작 (호스트 systemd, 통화 + 알림 처리)")
+
     while True:
         try:
             conn = await asyncpg.connect(DATABASE_URL)
@@ -241,11 +382,14 @@ async def main() -> None:
             continue
 
         try:
-            prompt_body, _ = load_prompt("call_summarize")
-            prompt_version_id = await ensure_prompt_version(conn, "call_summarize")
+            call_body, _ = load_prompt("call_summarize")
+            call_pv = await ensure_prompt_version(conn, "call_summarize")
+            notif_body, _ = load_prompt("notification_classify")
+            notif_pv = await ensure_prompt_version(conn, "notification_classify")
 
             while True:
-                rows = await conn.fetch(
+                # 1. 통화 처리 대기 폴링
+                transcripts = await conn.fetch(
                     """
                     SELECT id, text, event_id, user_id
                     FROM transcripts
@@ -255,19 +399,42 @@ async def main() -> None:
                     """,
                     BATCH_SIZE,
                 )
-                if not rows:
-                    await asyncio.sleep(POLL_INTERVAL_SEC)
-                    # 프롬프트 파일 변경 감지
-                    new_id = await ensure_prompt_version(conn, "call_summarize")
-                    if new_id != prompt_version_id:
-                        log.info(f"prompt version changed: {prompt_version_id} → {new_id}")
-                        prompt_body, _ = load_prompt("call_summarize")
-                        prompt_version_id = new_id
+                if transcripts:
+                    for row in transcripts:
+                        await process_transcript(conn, row, call_pv, call_body)
+                        await asyncio.sleep(CALL_GAP_SEC)
+                    continue   # 한 종류 다 처리하고 다시 루프
+
+                # 2. 알림 처리 대기 폴링
+                notifs = await conn.fetch(
+                    """
+                    SELECT id, user_id, source_package, title, content, timestamp
+                    FROM events
+                    WHERE type='notification' AND processing_status='PENDING'
+                    ORDER BY timestamp ASC
+                    LIMIT $1
+                    """,
+                    BATCH_SIZE,
+                )
+                if notifs:
+                    for row in notifs:
+                        await process_notification(conn, row, notif_pv, notif_body)
+                        await asyncio.sleep(CALL_GAP_SEC)
                     continue
 
-                for row in rows:
-                    await process_one(conn, row, prompt_version_id, prompt_body)
-                    await asyncio.sleep(CALL_GAP_SEC)
+                # 3. 둘 다 비어있으면 대기 + 프롬프트 변경 감지
+                await asyncio.sleep(POLL_INTERVAL_SEC)
+                new_call_pv = await ensure_prompt_version(conn, "call_summarize")
+                if new_call_pv != call_pv:
+                    log.info(f"call prompt version changed: {call_pv} → {new_call_pv}")
+                    call_body, _ = load_prompt("call_summarize")
+                    call_pv = new_call_pv
+                new_notif_pv = await ensure_prompt_version(conn, "notification_classify")
+                if new_notif_pv != notif_pv:
+                    log.info(f"notification prompt version changed: {notif_pv} → {new_notif_pv}")
+                    notif_body, _ = load_prompt("notification_classify")
+                    notif_pv = new_notif_pv
+
         except (asyncpg.PostgresConnectionError, ConnectionResetError, OSError) as e:
             log.warning(f"디비 연결 끊김. 재연결: {e}")
             try:
