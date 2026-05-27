@@ -13,7 +13,8 @@
 import json
 import os
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import aiofiles
@@ -162,7 +163,14 @@ async def upload_audio(
         try:
             ts_norm = device_timestamp.replace("Z", "+00:00") if device_timestamp.endswith("Z") else device_timestamp
             parsed_ts = datetime.fromisoformat(ts_norm)
-        except ValueError:
+            # 시간대 정보 없는 (naive) 경우 UTC 로 가정 — timestamptz 컬럼이 서버 컨테이너 시간대로 잘못 해석되지 않도록
+            if parsed_ts.tzinfo is None:
+                parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+                logging.getLogger(__name__).warning(
+                    "device_timestamp naive (no tz), assuming UTC: %s -> %s", device_timestamp, parsed_ts.isoformat()
+                )
+        except ValueError as e:
+            logging.getLogger(__name__).warning("device_timestamp parse failed: %s (%s)", device_timestamp, e)
             parsed_ts = None
 
     async with pool.acquire() as conn:

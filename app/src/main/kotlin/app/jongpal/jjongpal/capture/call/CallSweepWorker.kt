@@ -48,11 +48,26 @@ class CallSweepWorker @AssistedInject constructor(
             return Result.success()
         }
 
-        // 스캔 콜백 미설정 시 (관측 서비스 미가동) 잠시 콜백 직접 박아서 스캔만 실행
-        // start() 가 이미 호출됐다면 그 콜백 그대로 사용됨
+        // 자체 콜백 박아서 옵저버 (CallRecordingObserver) 의 콜백 미설정 상태에도 안전하게 동작
+        var foundCount = 0
         try {
-            observer.scanNow(reason = "sweep-worker")
-            syncScheduler.scheduleNow()
+            observer.scanNow("sweep-worker") { filePath, ts ->
+                val id = deterministicId(filePath)
+                // suspend 컨텍스트 안에서 호출됐지만 cb 는 동기 람다 — runBlocking 으로 직접 호출
+                kotlinx.coroutines.runBlocking {
+                    eventRepository.captureCallFile(
+                        eventId = id,
+                        filePath = filePath,
+                        durationSec = null,
+                        timestampMs = ts,
+                    )
+                }
+                foundCount++
+            }
+            if (foundCount > 0) {
+                syncScheduler.scheduleNow()
+                Timber.i("sweep found %d new calls", foundCount)
+            }
         } catch (e: Exception) {
             Timber.e(e, "sweep worker error")
             return Result.retry()
@@ -60,18 +75,26 @@ class CallSweepWorker @AssistedInject constructor(
         return Result.success()
     }
 
+    private fun deterministicId(filePath: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(("call:" + filePath).toByteArray(Charsets.UTF_8))
+        val hex = StringBuilder(32)
+        for (i in 0 until 16) {
+            val b = digest[i].toInt() and 0xFF
+            if (b < 0x10) hex.append('0')
+            hex.append(b.toString(16))
+        }
+        return "call-" + hex.toString()
+    }
+
     companion object {
         private const val UNIQUE_PERIODIC = "call-sweep-periodic"
         private const val UNIQUE_ONCE = "call-sweep-once"
 
         fun schedulePeriodic(context: Context) {
-            val req = PeriodicWorkRequestBuilder<CallSweepWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(
-                    Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
-                        .build()
-                )
-                .build()
+            // 네트워크 조건 안 박음 — 폴더 스캔은 오프라인에서도 동작해야 함.
+            // 발견된 통화 음원의 업로드는 SyncScheduler / 업로드 작업자 (CallUploadWorker) 자체 네트워크 조건이 처리
+            val req = PeriodicWorkRequestBuilder<CallSweepWorker>(15, TimeUnit.MINUTES).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 UNIQUE_PERIODIC,
                 ExistingPeriodicWorkPolicy.UPDATE,

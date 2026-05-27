@@ -66,12 +66,40 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         stop()
         callback = onNewCallFile
 
+        // 첫 시작 시각 박기 (이전 통화 녹음 일괄 처리 방지 — 이 시각 이전 파일은 무시)
+        if (prefs.getLong(KEY_INSTALL_TS_MS, 0L) == 0L) {
+            val nowMs = System.currentTimeMillis()
+            // 미디어 인덱스 의 현재 최대 식별자 도 같이 박아서 옛 항목 일괄 수집 방지
+            var currentMaxId = -1L
+            try {
+                context.contentResolver.query(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Audio.Media._ID),
+                    null, null,
+                    "${MediaStore.Audio.Media._ID} DESC LIMIT 1",
+                )?.use { cur ->
+                    if (cur.moveToFirst()) currentMaxId = cur.getLong(0)
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "seed lastSeenId failed")
+            }
+            prefs.edit()
+                .putLong(KEY_INSTALL_TS_MS, nowMs)
+                .putLong(KEY_LAST_MEDIASTORE_ID, currentMaxId)
+                .putLong(KEY_LAST_FILESCAN_MS, nowMs)
+                .apply()
+            Timber.i("seeded: installTs=%d lastMediaId=%d", nowMs, currentMaxId)
+        }
+
         // MediaStore 의 오디오 콘텐츠 URI 변경 감지 등록 — 시스템이 미디어 인덱스 갱신할 때마다 호출됨
         val resolver: ContentResolver = context.contentResolver
         val uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
         val observer = object : ContentObserver(mainHandler) {
             override fun onChange(selfChange: Boolean, changedUri: Uri?) {
-                scope.launch { scanMediaStore(onScanReason = "mediastore-change") }
+                scope.launch {
+                    val cb = callback ?: return@launch
+                    scanMutex.withLock { scanMediaStore("mediastore-change", cb) }
+                }
             }
         }
         try {
@@ -92,22 +120,24 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         }
         contentObserver = null
         callback = null
+        // 진행 중 코루틴 모두 취소 — 스코프는 객체 평생 그대로 (싱글톤이라 새 start 시 재사용)
+        scope.coroutineContext[kotlinx.coroutines.Job]?.children?.forEach { it.cancel() }
     }
 
     /**
      * 외부에서 명시적으로 스캔 트리거 (앱 시작 시 / 주기 작업 / 부팅 시).
-     * 콜백이 설정돼있어야 동작.
+     * - 콜백 (callback) 인자 박으면 그걸 사용 (관측 서비스 미가동 시 작업자 (CallSweepWorker) 가 직접 호출용)
+     * - 인자 없으면 start() 로 박힌 콜백 사용
      */
-    suspend fun scanNow(reason: String) {
-        val cb = callback ?: return
+    suspend fun scanNow(reason: String, cbOverride: ((String, Long) -> Unit)? = null) {
+        val cb = cbOverride ?: callback ?: return
         scanMutex.withLock {
-            scanMediaStore(reason)
+            scanMediaStore(reason, cb)
             scanFallbackDirs(cb, reason)
         }
     }
 
-    private suspend fun scanMediaStore(onScanReason: String) {
-        val cb = callback ?: return
+    private suspend fun scanMediaStore(onScanReason: String, cb: (String, Long) -> Unit) {
         val resolver = context.contentResolver
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -161,13 +191,23 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                         continue
                     }
                     val tsMs = (if (dateModifiedSec > 0L) dateModifiedSec else dateAddedSec) * 1000L
+                    val effectiveTsMs = if (tsMs > 0L) tsMs else File(data).lastModified()
+                    val installTsMs = prefs.getLong(KEY_INSTALL_TS_MS, 0L)
+                    // 앱 설치 (또는 이 옵저버 첫 시작) 이전 파일은 무시 — 옛 녹음 일괄 처리 방지
+                    if (installTsMs > 0L && effectiveTsMs < installTsMs) {
+                        if (id > maxId) maxId = id
+                        continue
+                    }
+                    var consumed = false
                     try {
-                        cb(data, if (tsMs > 0L) tsMs else File(data).lastModified())
+                        cb(data, effectiveTsMs)
                         count++
+                        consumed = true
                     } catch (e: Exception) {
                         Timber.e(e, "callback error for %s", data)
                     }
-                    if (id > maxId) maxId = id
+                    // 인서트 실패 시 식별자 안 박음 — 다음 스캔에서 재시도 가능
+                    if (consumed && id > maxId) maxId = id
                 }
             }
         } catch (e: Exception) {
@@ -182,6 +222,8 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
 
     private fun scanFallbackDirs(cb: (String, Long) -> Unit, reason: String) {
         val lastSeenMs = prefs.getLong(KEY_LAST_FILESCAN_MS, 0L)
+        val installTsMs = prefs.getLong(KEY_INSTALL_TS_MS, 0L)
+        val threshold = maxOf(lastSeenMs, installTsMs)
         var maxMs = lastSeenMs
         var count = 0
         fallbackDirs.forEach { path ->
@@ -193,14 +235,16 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                 if (!isAudioExt(file.name)) continue
                 if (file.length() <= 0L) continue
                 val mtime = file.lastModified()
-                if (mtime <= lastSeenMs) continue
+                if (mtime <= threshold) continue
+                var consumed = false
                 try {
                     cb(file.absolutePath, mtime)
                     count++
+                    consumed = true
                 } catch (e: Exception) {
                     Timber.e(e, "callback error for %s", file.absolutePath)
                 }
-                if (mtime > maxMs) maxMs = mtime
+                if (consumed && mtime > maxMs) maxMs = mtime
             }
         }
         if (maxMs > lastSeenMs) {
@@ -220,5 +264,6 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         private const val PREFS = "call_observer_state"
         private const val KEY_LAST_MEDIASTORE_ID = "last_mediastore_id"
         private const val KEY_LAST_FILESCAN_MS = "last_filescan_ms"
+        private const val KEY_INSTALL_TS_MS = "install_ts_ms"
     }
 }
