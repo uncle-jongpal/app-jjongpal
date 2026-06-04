@@ -7,6 +7,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import app.jongpal.jjongpal.ui.permission.PermissionScreen
@@ -128,9 +132,73 @@ private fun SummariesTab(summaries: List<app.jongpal.jjongpal.data.local.Summary
         items(summaries, key = { it.id }) { s ->
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text(s.summary ?: "(요약 없음)", style = MaterialTheme.typography.bodyLarge)
+                    MarkdownText(s.summary ?: "(요약 없음)")
                 }
             }
+        }
+    }
+}
+
+/**
+ * 요약 (`summaries.summary`) 의 가벼운 마크다운 렌더. 메모리 안전을 위해 줄 단위로만 처리.
+ * 처리 패턴:
+ *   - `### 헤더`        → 헤더 스타일 + 굵게
+ *   - `- [ ] 텍스트`    → 체크박스 ☐ + 텍스트
+ *   - `- [x] 텍스트`    → 체크박스 ☑ + 텍스트
+ *   - `- 텍스트`        → 불릿 • + 텍스트
+ *   - 빈 줄              → 간격
+ *   - 그 외              → 본문
+ * 본문 안의 `**bold**` 만 추가 변환. 외부 라이브러리 없음 → 메모리 부담 최소.
+ */
+@Composable
+private fun MarkdownText(raw: String) {
+    val maxChars = 4_000
+    val text = if (raw.length > maxChars) raw.substring(0, maxChars) + "\n… (이하 생략)" else raw
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        text.lineSequence().forEach { line ->
+            when {
+                line.startsWith("### ") -> Text(
+                    line.removePrefix("### "),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                )
+                line.startsWith("- [ ] ") -> Text(
+                    "☐  " + line.removePrefix("- [ ] "),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                line.startsWith("- [x] ") || line.startsWith("- [X] ") -> Text(
+                    "☑  " + line.removePrefix("- ").drop(4),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                line.startsWith("- ") -> Text(
+                    "•  " + applyInlineBold(line.removePrefix("- ")),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                line.isBlank() -> Spacer(Modifier.height(4.dp))
+                else -> Text(
+                    applyInlineBold(line),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+    }
+}
+
+/** `**bold**` 부분만 굵게 표시 — AnnotatedString 으로 한 번 빌드. */
+private fun applyInlineBold(src: String): androidx.compose.ui.text.AnnotatedString {
+    return buildAnnotatedString {
+        var i = 0
+        while (i < src.length) {
+            val open = src.indexOf("**", i)
+            if (open < 0) { append(src.substring(i)); break }
+            append(src.substring(i, open))
+            val close = src.indexOf("**", open + 2)
+            if (close < 0) { append(src.substring(open)); break }
+            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+                append(src.substring(open + 2, close))
+            }
+            i = close + 2
         }
     }
 }
