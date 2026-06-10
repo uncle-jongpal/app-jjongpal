@@ -16,4 +16,7 @@ interface AppointmentDao {
 
     @Query("SELECT * FROM appointments WHERE startAt >= :sinceMs ORDER BY startAt ASC LIMIT :limit")
     fun upcoming(sinceMs: Long = System.currentTimeMillis(), limit: Int = 100): Flow<List<AppointmentEntity>>
+
+    @Query("UPDATE appointments SET confirmed = :confirmed WHERE id = :id")
+    suspend fun setConfirmed(id: String, confirmed: Boolean)
 }

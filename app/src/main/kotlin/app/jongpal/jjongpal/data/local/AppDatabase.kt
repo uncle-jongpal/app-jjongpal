@@ -10,7 +10,7 @@ import androidx.room.RoomDatabase
         SummaryEntity::class,
         AppointmentEntity::class,
     ],
-    version = 2,                              // v2: events 에 phoneClassification 컬럼 추가
+    version = 3,                              // v3: todos/appointments 에 sourceExcerpt 컬럼 추가
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

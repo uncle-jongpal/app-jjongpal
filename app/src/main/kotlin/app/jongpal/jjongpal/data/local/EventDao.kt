@@ -51,6 +51,11 @@ interface EventDao {
     @Query("UPDATE events SET syncStatus = :status, syncedAt = :syncedAt, lastError = :error, retryCount = retryCount + :retryDelta WHERE id = :id")
     suspend fun updateSync(id: String, status: String, syncedAt: Long?, error: String?, retryDelta: Int)
 
+    // 업로드 중 파일이 자라나 크기 불일치로 실패 후 재시도 소진된 통화 재등록 (파일 안정 후 재업로드용).
+    // 재등록되면 syncStatus 가 PENDING 으로 바뀌어 이 조건에서 빠지므로 반복 등록 안 됨.
+    @Query("UPDATE events SET syncStatus = 'PENDING', retryCount = 0, lastError = NULL WHERE type = 'call' AND syncStatus = 'FAILED' AND lastError LIKE '%bytes but received%'")
+    suspend fun requeueSizeMismatchCalls(): Int
+
     @Query("SELECT COUNT(*) FROM events WHERE syncStatus = :status")
     fun countByStatus(status: String): Flow<Int>
 }

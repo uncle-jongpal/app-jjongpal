@@ -18,9 +18,10 @@ data class TodoEntity(
     val content: String,
     val source: String,                             // 'manual' | 'call' | 'notification' | 'ai_suggestion'
     val sourceEventId: String?,
+    val sourceExcerpt: String? = null,              // 근거가 된 발화/알림 한 구절
     val dueAt: Long?,
     val relatedPerson: String?,
-    val status: String = "open",                    // 'open' | 'done' | 'archived'
+    val status: String = "open",                    // 'open' | 'done' | 'archived' | 'suggested' | 'dismissed'
     val completionConfidence: Float = 0f,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),

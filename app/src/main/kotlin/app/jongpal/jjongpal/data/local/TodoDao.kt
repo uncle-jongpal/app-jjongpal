@@ -14,8 +14,11 @@ interface TodoDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(todos: List<TodoEntity>)
 
-    @Query("SELECT * FROM todos WHERE status != 'archived' ORDER BY (status = 'open') DESC, COALESCE(dueAt, createdAt) ASC")
+    @Query("SELECT * FROM todos WHERE status IN ('open', 'done') ORDER BY (status = 'open') DESC, COALESCE(dueAt, createdAt) ASC")
     fun activeStream(): Flow<List<TodoEntity>>
+
+    @Query("SELECT * FROM todos WHERE status = 'suggested' ORDER BY createdAt DESC")
+    fun suggestionsStream(): Flow<List<TodoEntity>>
 
     @Query("SELECT * FROM todos WHERE id = :id")
     suspend fun get(id: String): TodoEntity?
@@ -25,6 +28,9 @@ interface TodoDao {
 
     @Query("SELECT * FROM todos WHERE syncStatus = 'PENDING' ORDER BY updatedAt ASC LIMIT :limit")
     suspend fun pendingForSync(limit: Int = 50): List<TodoEntity>
+
+    @Query("SELECT id FROM todos WHERE syncStatus = 'PENDING'")
+    suspend fun pendingIds(): List<String>
 
     @Query("UPDATE todos SET syncStatus = 'SYNCED', serverUpdatedAt = :serverUpdatedAt WHERE id = :id")
     suspend fun markSynced(id: String, serverUpdatedAt: Long)

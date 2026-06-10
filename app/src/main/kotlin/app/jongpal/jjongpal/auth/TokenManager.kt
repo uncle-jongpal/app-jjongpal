@@ -48,6 +48,12 @@ class TokenManager @Inject constructor(@ApplicationContext private val context: 
         get() = prefs.getString("device_id", null)
         set(value) { prefs.edit().putString("device_id", value).apply() }
 
+    // 어드민의 "모든 사용자 데이터 보기" 토글. 기본값: 꺼짐.
+    // 일반 사용자는 RLS 가 자동으로 본인 데이터만 노출하므로 의미 없음.
+    var showAllUsersForAdmin: Boolean
+        get() = prefs.getBoolean("show_all_users", false)
+        set(value) { prefs.edit().putBoolean("show_all_users", value).apply() }
+
     fun hasValidSession(): Boolean = !accessToken.isNullOrBlank() && !refreshToken.isNullOrBlank()
 
     fun clear() { prefs.edit().clear().apply() }

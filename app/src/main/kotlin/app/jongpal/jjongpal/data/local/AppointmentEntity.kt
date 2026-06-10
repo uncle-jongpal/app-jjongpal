@@ -14,6 +14,7 @@ data class AppointmentEntity(
     @PrimaryKey val id: String,
     val userId: Int,
     val sourceEventId: String?,
+    val sourceExcerpt: String? = null,
     val title: String,
     val startAt: Long,
     val endAt: Long?,

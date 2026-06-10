@@ -41,10 +41,16 @@ class CallUploadWorker @AssistedInject constructor(
 
     companion object {
         private val MAP_TYPE = Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+        // 마지막 수정 후 이 시간(밀리초) 지나야 업로드 — 녹음 저장 마무리 대기.
+        private const val SETTLE_MS = 20_000L
     }
 
     override suspend fun doWork(): Result {
         if (!tokenManager.hasValidSession()) return Result.success()
+
+        // 과거 "업로드 중 파일이 자라 크기 불일치" 로 재시도 소진된 통화 재등록 (파일 안정됐으니 재업로드)
+        val requeued = eventDao.requeueSizeMismatchCalls()
+        if (requeued > 0) Timber.i("requeued %d size-mismatch calls", requeued)
 
         val pending = eventDao.pendingForSync()
             .filter { it.type == "call" }
@@ -52,6 +58,7 @@ class CallUploadWorker @AssistedInject constructor(
 
         var ok = 0
         var failed = 0
+        var deferred = 0
         val deviceId = tokenManager.deviceId
 
         for (event in pending) {
@@ -70,9 +77,18 @@ class CallUploadWorker @AssistedInject constructor(
                 failed++
                 continue
             }
+            // 녹음 저장 마무리 전이면 미루기 — 업로드 중 파일이 커져 크기 불일치로 실패하던 버그 방지.
+            // PENDING 유지 + 재시도 횟수 안 올림 (실패로 안 침).
+            if (System.currentTimeMillis() - file.lastModified() < SETTLE_MS) {
+                deferred++
+                continue
+            }
 
+            // 안정된 사본을 떠서 업로드 — 업로드 도중 원본이 바뀌어도 선언 크기와 전송 크기가 어긋나지 않음.
+            val snapshot = File(applicationContext.cacheDir, "callup_${event.id}.m4a")
             try {
-                val body = file.asRequestBody("audio/m4a".toMediaTypeOrNull())
+                file.copyTo(snapshot, overwrite = true)
+                val body = snapshot.asRequestBody("audio/m4a".toMediaTypeOrNull())
                 val part = MultipartBody.Part.createFormData("file", file.name, body)
 
                 val resp = uploadApi.uploadAudio(
@@ -95,9 +111,12 @@ class CallUploadWorker @AssistedInject constructor(
                 Timber.e(e, "upload error for %s", filePath)
                 eventDao.updateSync(event.id, "FAILED", null, e.message ?: "error", 1)
                 failed++
+            } finally {
+                try { snapshot.delete() } catch (_: Exception) {}
             }
         }
-        Timber.i("CallUploadWorker ok=%d failed=%d", ok, failed)
-        return if (failed > 0 && ok == 0) Result.retry() else Result.success()
+        Timber.i("CallUploadWorker ok=%d failed=%d deferred=%d", ok, failed, deferred)
+        // 미뤄둔 (아직 저장 중) 게 있거나, 전부 실패면 재시도 예약
+        return if (deferred > 0 || (failed > 0 && ok == 0)) Result.retry() else Result.success()
     }
 }

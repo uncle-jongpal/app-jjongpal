@@ -63,7 +63,7 @@ docker compose logs -f
 
 ```bash
 cd ..  # jjongpal-app/
-./scripts/create-user.sh "acosmeticstory@gmail.com" "김정석" admin
+./scripts/create-user.sh "your-email@example.com" "김정석" admin
 # → 출력에 이메일 / 임시 비밀번호 표시. 본인 폰에서 로그인.
 ```
 

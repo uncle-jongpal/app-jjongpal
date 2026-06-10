@@ -152,26 +152,26 @@ private fun PermissionRow(label: String, description: String, granted: Boolean, 
     }
 }
 
-private fun isNotificationAccessGranted(context: Context): Boolean {
+internal fun isNotificationAccessGranted(context: Context): Boolean {
     val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: return false
     val cn = ComponentName(context, NotificationCaptureService::class.java).flattenToString()
     val cnShort = ComponentName(context, NotificationCaptureService::class.java).flattenToShortString()
     return flat.contains(cn) || flat.contains(cnShort)
 }
 
-private fun isBatteryUnrestricted(context: Context): Boolean {
+internal fun isBatteryUnrestricted(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
     val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     return pm.isIgnoringBatteryOptimizations(context.packageName)
 }
 
-private fun hasPostNotificationsPermission(context: Context): Boolean {
+internal fun hasPostNotificationsPermission(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
     val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     return nm.areNotificationsEnabled()
 }
 
-private fun hasMediaAudioPermission(context: Context): Boolean {
+internal fun hasMediaAudioPermission(context: Context): Boolean {
     val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
         Manifest.permission.READ_MEDIA_AUDIO
     else
@@ -179,7 +179,7 @@ private fun hasMediaAudioPermission(context: Context): Boolean {
     return ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
 }
 
-private fun hasAllFilesAccess(context: Context): Boolean {
+internal fun hasAllFilesAccess(context: Context): Boolean {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         Environment.isExternalStorageManager()
     } else {

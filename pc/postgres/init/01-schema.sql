@@ -129,6 +129,7 @@ CREATE TABLE todos (
     content                 TEXT NOT NULL,
     source                  TEXT,
     source_event_id         TEXT REFERENCES events(id) ON DELETE SET NULL,
+    source_excerpt          TEXT,
     due_at                  TIMESTAMPTZ,
     related_person          TEXT,
     status                  TEXT NOT NULL DEFAULT 'open',
@@ -136,7 +137,8 @@ CREATE TABLE todos (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at            TIMESTAMPTZ,
-    CONSTRAINT todos_status_chk CHECK (status IN ('open', 'done', 'archived'))
+    -- 'suggested' = 삼촌이 찾았지만 사용자 확인 대기, 'dismissed' = 사용자가 넘김
+    CONSTRAINT todos_status_chk CHECK (status IN ('open', 'done', 'archived', 'suggested', 'dismissed'))
 );
 
 CREATE INDEX idx_todos_user_status ON todos(user_id, status);
@@ -147,6 +149,7 @@ CREATE TABLE appointments (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     source_event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
+    source_excerpt  TEXT,
     title           TEXT NOT NULL,
     start_at        TIMESTAMPTZ NOT NULL,
     end_at          TIMESTAMPTZ,

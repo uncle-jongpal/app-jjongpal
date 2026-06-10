@@ -155,12 +155,13 @@ async def insert_todos_and_appts(
         if not content:
             continue
         content_safe = content[:500]
+        excerpt = (t.get("quote") or "").strip()[:200] or None
 
-        # 중복 방지: 같은 (user_id, content) 의 활성 (open) 할 일이 이미 있으면 INSERT 안 함.
+        # 중복 방지: 같은 (user_id, content) 의 처리 대기 (open / suggested) 할 일이 이미 있으면 INSERT 안 함.
         existing = await conn.fetchval(
             """
             SELECT id FROM todos
-            WHERE user_id = $1 AND content = $2 AND status = 'open'
+            WHERE user_id = $1 AND content = $2 AND status IN ('open', 'suggested')
             LIMIT 1
             """,
             user_id, content_safe,
@@ -168,13 +169,14 @@ async def insert_todos_and_appts(
         if existing:
             continue
 
+        # 삼촌이 찾은 할 일은 'suggested' (확인 대기) 로 들어감 — 사용자가 확인해야 목록에 올라감.
         await conn.execute(
             """
-            INSERT INTO todos (id, user_id, content, source, source_event_id, related_person, status)
-            VALUES ($1, $2, $3, $4, $5, $6, 'open')
+            INSERT INTO todos (id, user_id, content, source, source_event_id, source_excerpt, related_person, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'suggested')
             ON CONFLICT (id) DO NOTHING
             """,
-            str(uuid4()), user_id, content_safe, source, source_event_id,
+            str(uuid4()), user_id, content_safe, source, source_event_id, excerpt,
             (t.get("person") or None),
         )
         todo_count += 1
@@ -190,12 +192,13 @@ async def insert_todos_and_appts(
             confidence = float(a.get("confidence", 0.5))
         except (TypeError, ValueError):
             confidence = 0.5
+        excerpt = (a.get("quote") or "").strip()[:200] or None
         await conn.execute(
             """
-            INSERT INTO appointments (user_id, source_event_id, title, start_at, end_at, location, with_person, confidence)
-            VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6, $7, $8)
+            INSERT INTO appointments (user_id, source_event_id, source_excerpt, title, start_at, end_at, location, with_person, confidence)
+            VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7, $8, $9)
             """,
-            user_id, source_event_id, title[:200], start_at, parse_iso8601(a.get("end_at")),
+            user_id, source_event_id, excerpt, title[:200], start_at, parse_iso8601(a.get("end_at")),
             (a.get("location") or None), (a.get("with") or None), max(0.0, min(1.0, confidence)),
         )
         appt_count += 1

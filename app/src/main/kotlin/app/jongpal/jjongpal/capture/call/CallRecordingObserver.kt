@@ -112,6 +112,15 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
 
         // 시작 직후 초기 스캔 (그동안 누락된 파일 일괄 처리)
         scope.launch { scanNow(reason = "start") }
+
+        // 일회성 백필 — 옛 책갈피 전진 버그로 묻힌 과거 녹음 복구.
+        // 책갈피(_ID/시각) 를 무시하고 설치 이후 모든 녹음을 재스캔. 이미 올린 건 로컬 IGNORE 로 자동 중복 방지.
+        if (!prefs.getBoolean(KEY_BACKFILL_V1_DONE, false)) {
+            scope.launch {
+                scanNow(reason = "backfill-v1", ignoreWatermark = true)
+                prefs.edit().putBoolean(KEY_BACKFILL_V1_DONE, true).apply()
+            }
+        }
     }
 
     fun stop() {
@@ -129,15 +138,23 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
      * - 콜백 (callback) 인자 박으면 그걸 사용 (관측 서비스 미가동 시 작업자 (CallSweepWorker) 가 직접 호출용)
      * - 인자 없으면 start() 로 박힌 콜백 사용
      */
-    suspend fun scanNow(reason: String, cbOverride: ((String, Long) -> Unit)? = null) {
+    suspend fun scanNow(
+        reason: String,
+        ignoreWatermark: Boolean = false,
+        cbOverride: ((String, Long) -> Unit)? = null,
+    ) {
         val cb = cbOverride ?: callback ?: return
         scanMutex.withLock {
-            scanMediaStore(reason, cb)
-            scanFallbackDirs(cb, reason)
+            scanMediaStore(reason, cb, ignoreWatermark)
+            scanFallbackDirs(cb, reason, ignoreWatermark)
         }
     }
 
-    private suspend fun scanMediaStore(onScanReason: String, cb: (String, Long) -> Unit) {
+    private suspend fun scanMediaStore(
+        onScanReason: String,
+        cb: (String, Long) -> Unit,
+        ignoreWatermark: Boolean = false,
+    ) {
         val resolver = context.contentResolver
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
@@ -150,6 +167,8 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
 
         // 마지막 본 식별자 이후만 — 재시작 후에도 이어서 동작
         val lastSeenId = prefs.getLong(KEY_LAST_MEDIASTORE_ID, -1L)
+        // 백필 모드에선 책갈피 무시하고 설치 이후 전체 재질의 (묻힌 녹음 복구). 저장 책갈피는 뒤로 안 밀림.
+        val queryFloorId = if (ignoreWatermark) -1L else lastSeenId
 
         // RELATIVE_PATH 는 API 29 (안드로이드 10) 부터 사용 가능
         val hasRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
@@ -158,15 +177,18 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         if (hasRelativePath) {
             val pathClauses = relativePathPrefixes.joinToString(" OR ") { "${MediaStore.Audio.Media.RELATIVE_PATH} LIKE ?" }
             selection = "($pathClauses) AND ${MediaStore.Audio.Media._ID} > ?"
-            args = (relativePathPrefixes.map { "$it%" } + lastSeenId.toString()).toTypedArray()
+            args = (relativePathPrefixes.map { "$it%" } + queryFloorId.toString()).toTypedArray()
         } else {
             // 9 이하: DATA 컬럼으로 검색
             val dataClauses = fallbackDirs.joinToString(" OR ") { "${MediaStore.Audio.Media.DATA} LIKE ?" }
             selection = "($dataClauses) AND ${MediaStore.Audio.Media._ID} > ?"
-            args = (fallbackDirs.map { "$it/%" } + lastSeenId.toString()).toTypedArray()
+            args = (fallbackDirs.map { "$it/%" } + queryFloorId.toString()).toTypedArray()
         }
 
         var maxId = lastSeenId
+        // 이번 스캔에서 본but안 올린(아직 쓰는 중 / 콜백 실패) 가장 낮은 식별자.
+        // 책갈피가 이 항목을 넘어 전진하면 영영 묻히므로, 전진 상한으로 사용.
+        var pendingMinId = Long.MAX_VALUE
         var count = 0
         try {
             resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, args, "${MediaStore.Audio.Media._ID} ASC")?.use { cursor ->
@@ -187,7 +209,8 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                         continue
                     }
                     if (size <= 0L) {
-                        // 아직 쓰는 중 — 다음 스캔에서 잡힘. _ID 진행은 안 함.
+                        // 아직 쓰는 중 — 다음 스캔에서 잡힘. 책갈피가 이 항목을 넘지 못하게 보류 최저값 갱신.
+                        if (id < pendingMinId) pendingMinId = id
                         continue
                     }
                     val tsMs = (if (dateModifiedSec > 0L) dateModifiedSec else dateAddedSec) * 1000L
@@ -206,25 +229,34 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                     } catch (e: Exception) {
                         Timber.e(e, "callback error for %s", data)
                     }
-                    // 인서트 실패 시 식별자 안 박음 — 다음 스캔에서 재시도 가능
-                    if (consumed && id > maxId) maxId = id
+                    if (consumed) {
+                        if (id > maxId) maxId = id
+                    } else {
+                        // 콜백 실패 — 다음 스캔에서 재시도. 책갈피가 이 항목을 넘지 못하게 보류 최저값 갱신.
+                        if (id < pendingMinId) pendingMinId = id
+                    }
                 }
             }
         } catch (e: Exception) {
             Timber.e(e, "MediaStore query failed")
             return
         }
-        if (maxId > lastSeenId) {
-            prefs.edit().putLong(KEY_LAST_MEDIASTORE_ID, maxId).apply()
+        // 책갈피는 보류 항목(아직 쓰는 중 / 실패) 직전까지만 전진 — 건너뛴 낮은 식별자가 묻히는 것 방지.
+        val safeMax = if (pendingMinId != Long.MAX_VALUE) minOf(maxId, pendingMinId - 1) else maxId
+        if (safeMax > lastSeenId) {
+            prefs.edit().putLong(KEY_LAST_MEDIASTORE_ID, safeMax).apply()
         }
-        Timber.i("scanMediaStore reason=%s count=%d lastSeenId=%d", onScanReason, count, maxId)
+        Timber.i("scanMediaStore reason=%s count=%d lastSeenId=%d", onScanReason, count, safeMax)
     }
 
-    private fun scanFallbackDirs(cb: (String, Long) -> Unit, reason: String) {
+    private fun scanFallbackDirs(cb: (String, Long) -> Unit, reason: String, ignoreWatermark: Boolean = false) {
         val lastSeenMs = prefs.getLong(KEY_LAST_FILESCAN_MS, 0L)
         val installTsMs = prefs.getLong(KEY_INSTALL_TS_MS, 0L)
-        val threshold = maxOf(lastSeenMs, installTsMs)
+        // 백필 모드에선 시각 책갈피 무시하고 설치 이후 전체 — 묻힌 녹음 복구. 저장 책갈피는 뒤로 안 밀림.
+        val threshold = if (ignoreWatermark) installTsMs else maxOf(lastSeenMs, installTsMs)
         var maxMs = lastSeenMs
+        // 콜백 실패한 가장 이른 시각 — 책갈피가 이를 넘으면 묻히므로 전진 상한.
+        var pendingMinMs = Long.MAX_VALUE
         var count = 0
         fallbackDirs.forEach { path ->
             val dir = File(path)
@@ -244,13 +276,19 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                 } catch (e: Exception) {
                     Timber.e(e, "callback error for %s", file.absolutePath)
                 }
-                if (consumed && mtime > maxMs) maxMs = mtime
+                if (consumed) {
+                    if (mtime > maxMs) maxMs = mtime
+                } else {
+                    if (mtime < pendingMinMs) pendingMinMs = mtime
+                }
             }
         }
-        if (maxMs > lastSeenMs) {
-            prefs.edit().putLong(KEY_LAST_FILESCAN_MS, maxMs).apply()
+        // 책갈피는 실패 항목 직전까지만 전진.
+        val safeMaxMs = if (pendingMinMs != Long.MAX_VALUE) minOf(maxMs, pendingMinMs - 1) else maxMs
+        if (safeMaxMs > lastSeenMs) {
+            prefs.edit().putLong(KEY_LAST_FILESCAN_MS, safeMaxMs).apply()
         }
-        Timber.i("scanFallbackDirs reason=%s count=%d lastSeenMs=%d", reason, count, maxMs)
+        Timber.i("scanFallbackDirs reason=%s count=%d lastSeenMs=%d", reason, count, safeMaxMs)
     }
 
     private fun isAudioExt(nameOrPath: String): Boolean {
@@ -265,5 +303,6 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         private const val KEY_LAST_MEDIASTORE_ID = "last_mediastore_id"
         private const val KEY_LAST_FILESCAN_MS = "last_filescan_ms"
         private const val KEY_INSTALL_TS_MS = "install_ts_ms"
+        private const val KEY_BACKFILL_V1_DONE = "backfill_v1_done"
     }
 }
