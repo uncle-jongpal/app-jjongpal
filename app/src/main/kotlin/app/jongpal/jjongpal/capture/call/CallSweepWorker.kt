@@ -75,17 +75,8 @@ class CallSweepWorker @AssistedInject constructor(
         return Result.success()
     }
 
-    private fun deterministicId(filePath: String): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(("call:" + filePath).toByteArray(Charsets.UTF_8))
-        val hex = StringBuilder(32)
-        for (i in 0 until 16) {
-            val b = digest[i].toInt() and 0xFF
-            if (b < 0x10) hex.append('0')
-            hex.append(b.toString(16))
-        }
-        return "call-" + hex.toString()
-    }
+    // 결정적 ID 로직은 CallId 로 통합(FileObserverService 와 동일 보장, 회귀 테스트로 고정)
+    private fun deterministicId(filePath: String): String = CallId.deterministic(filePath)
 
     companion object {
         private const val UNIQUE_PERIODIC = "call-sweep-periodic"
@@ -98,6 +89,18 @@ class CallSweepWorker @AssistedInject constructor(
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 UNIQUE_PERIODIC,
                 ExistingPeriodicWorkPolicy.UPDATE,
+                req,
+            )
+        }
+
+        /** 통화 종료 등 특정 시점 이후 지연 실행 — 녹음 파일 완성 시차 대응 */
+        fun runAfter(context: Context, delaySec: Long, tag: String) {
+            val req = OneTimeWorkRequestBuilder<CallSweepWorker>()
+                .setInitialDelay(delaySec, TimeUnit.SECONDS)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "$UNIQUE_ONCE-$tag",
+                ExistingWorkPolicy.REPLACE,
                 req,
             )
         }

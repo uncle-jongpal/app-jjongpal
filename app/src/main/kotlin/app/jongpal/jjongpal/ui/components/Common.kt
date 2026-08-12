@@ -141,20 +141,31 @@ fun GhostButton(
     text: String,
     modifier: Modifier = Modifier,
     small: Boolean = false,
+    enabled: Boolean = true,
+    danger: Boolean = false,
     onClick: () -> Unit,
 ) {
     val c = JpTheme.colors
+    val fg = when {
+        !enabled -> c.ink3
+        danger -> c.danger
+        else -> c.ink
+    }
     Box(
         modifier
             .height(if (small) 36.dp else 46.dp)
             .clip(RoundedCornerShape(if (small) 11.dp else 14.dp))
             .background(c.surface2)
-            .border(1.dp, c.line, RoundedCornerShape(if (small) 11.dp else 14.dp))
-            .clickable(onClick = onClick)
+            .border(1.dp, if (danger) c.danger.copy(alpha = 0.4f) else c.line, RoundedCornerShape(if (small) 11.dp else 14.dp))
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = if (small) 14.dp else 20.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = if (small) JpText.body.copy(fontWeight = FontWeight.Bold) else JpText.button, color = c.ink)
+        Text(
+            text,
+            style = if (small) JpText.body.copy(fontWeight = FontWeight.Bold) else JpText.button,
+            color = fg,
+        )
     }
 }
 

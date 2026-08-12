@@ -26,6 +26,23 @@ class AppointmentRepository @Inject constructor(
 
     fun upcoming(): Flow<List<AppointmentEntity>> = dao.upcoming()
 
+    fun upcomingByUser(userId: Int): Flow<List<AppointmentEntity>> = dao.upcomingByUser(userId)
+
+    // 지난 약속까지 — 화면에서 필터링해서 보여줌
+    fun all(): Flow<List<AppointmentEntity>> = dao.all()
+
+    fun allByUser(userId: Int): Flow<List<AppointmentEntity>> = dao.allByUser(userId)
+
+    // 약속 삭제 — 로컬 먼저 지우고(낙관적) 서버에도 삭제 시도
+    suspend fun delete(id: String) {
+        dao.deleteById(id)
+        try {
+            pcApi.deleteAppointment(idEq = "eq.$id")
+        } catch (e: Exception) {
+            Timber.e(e, "delete appointment push failed")
+        }
+    }
+
     // 받은 정리함 제안 → 약속으로 확정 (로컬 생성). 서버 push 경로는 아직 없음 — 로컬에만 남음.
     suspend fun createLocal(
         userId: Int,
@@ -95,10 +112,12 @@ class AppointmentRepository @Inject constructor(
             createdAt = parseIso(created_at) ?: System.currentTimeMillis(),
         )
 
+    // ISO 8601 파싱 — 소수점초 없음/마이크로초/오프셋(+09:00·Z·-07:00) 모두 허용.
+    // (예전 isoFormat 은 소수점초 .SSS 를 필수로 요구 → 정시 약속이 전부 파싱 실패해 현재시각으로 망가졌음)
     private fun parseIso(s: String): Long? = try {
-        isoFormat.parse(s)?.time
+        java.time.OffsetDateTime.parse(s).toInstant().toEpochMilli()
     } catch (e: Exception) {
-        null
+        try { java.time.Instant.parse(s).toEpochMilli() } catch (e2: Exception) { null }
     }
 
     // user_id 필터 — 어드민 + "모두 보기" 모드만 null, 그 외 본인 id 박음.

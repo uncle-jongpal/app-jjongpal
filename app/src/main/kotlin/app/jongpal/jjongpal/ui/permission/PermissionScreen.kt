@@ -44,6 +44,8 @@ fun PermissionScreen() {
     var postNotif by remember { mutableStateOf(hasPostNotificationsPermission(context)) }
     var mediaAudio by remember { mutableStateOf(hasMediaAudioPermission(context)) }
     var allFiles by remember { mutableStateOf(hasAllFilesAccess(context)) }
+    var phoneState by remember { mutableStateOf(hasPhoneStatePermission(context)) }
+    var callLog by remember { mutableStateOf(hasCallLogPermission(context)) }
 
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         notifAccess = isNotificationAccessGranted(context)
@@ -60,6 +62,12 @@ fun PermissionScreen() {
     val allFilesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         allFiles = hasAllFilesAccess(context)
     }
+    val phoneStateLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        phoneState = hasPhoneStatePermission(context)
+    }
+    val callLogLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        callLog = hasCallLogPermission(context)
+    }
 
     LaunchedEffect(Unit) {
         // 화면 들어올 때마다 재확인 (외부 설정에서 켰을 수 있음)
@@ -68,6 +76,8 @@ fun PermissionScreen() {
         postNotif = hasPostNotificationsPermission(context)
         mediaAudio = hasMediaAudioPermission(context)
         allFiles = hasAllFilesAccess(context)
+        phoneState = hasPhoneStatePermission(context)
+        callLog = hasCallLogPermission(context)
     }
 
     Column(
@@ -78,12 +88,7 @@ fun PermissionScreen() {
         Text("앱이 동작하려면 아래 권한이 필요해요.", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(8.dp))
 
-        PermissionRow(
-            label = "알림 접근 허용",
-            description = "다른 앱의 알림을 캡처하려면 필요합니다.",
-            granted = notifAccess,
-            onClick = { notifLauncher.launch(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
-        )
+        // v2(통화 정리 전용): 알림 접근 유도 제거 — 알림 수집 기능 비활성화됨
         PermissionRow(
             label = "배터리 최적화 제외",
             description = "백그라운드에서 안정적으로 동작하기 위해 필요합니다.",
@@ -117,6 +122,18 @@ fun PermissionScreen() {
                     mediaAudioLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
                 }
             },
+        )
+        PermissionRow(
+            label = "전화 상태 확인",
+            description = "통화가 끝나는 순간을 감지해 녹음 완성본을 바로 올리기 위해 필요합니다.",
+            granted = phoneState,
+            onClick = { phoneStateLauncher.launch(Manifest.permission.READ_PHONE_STATE) },
+        )
+        PermissionRow(
+            label = "통화 상대 번호 읽기",
+            description = "통화가 끝나면 통화기록에서 상대 전화번호를 확보해 번호별로 검색할 수 있게 합니다.",
+            granted = callLog,
+            onClick = { callLogLauncher.launch(Manifest.permission.READ_CALL_LOG) },
         )
         PermissionRow(
             label = "모든 파일 접근 (통화 녹음 폴더)",
@@ -177,6 +194,18 @@ internal fun hasMediaAudioPermission(context: Context): Boolean {
     else
         Manifest.permission.READ_EXTERNAL_STORAGE
     return ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+}
+
+internal fun hasPhoneStatePermission(context: Context): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context, Manifest.permission.READ_PHONE_STATE
+    ) == PackageManager.PERMISSION_GRANTED
+}
+
+internal fun hasCallLogPermission(context: Context): Boolean {
+    return ContextCompat.checkSelfPermission(
+        context, Manifest.permission.READ_CALL_LOG
+    ) == PackageManager.PERMISSION_GRANTED
 }
 
 internal fun hasAllFilesAccess(context: Context): Boolean {

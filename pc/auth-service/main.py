@@ -184,6 +184,35 @@ async def login(req: LoginReq, request: Request) -> LoginResp:
     ua = request.headers.get("user-agent")
 
     async with pool.acquire() as conn:
+        # 무차별 대입 방어: 최근 15분 실패 누적이 임계치를 넘으면 즉시 차단
+        # (같은 이메일 5회 또는 같은 IP 15회). 실패 로그를 그대로 활용.
+        throttle = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE target = $1)        AS email_fails,
+                COUNT(*) FILTER (WHERE ip_address = $2::inet) AS ip_fails
+            FROM user_activity_log
+            WHERE action = 'login.fail'
+              AND created_at > now() - interval '15 minutes'
+            """,
+            req.email, ip,
+        )
+        if throttle is not None and (
+            throttle["email_fails"] >= 5 or (ip is not None and throttle["ip_fails"] >= 15)
+        ):
+            await log_activity(
+                conn, None, None, "login.blocked", req.email, ip, ua,
+                {
+                    "email_fails": throttle["email_fails"],
+                    "ip_fails": throttle["ip_fails"],
+                    "device_name": req.device_name,
+                },
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="too many failed attempts, try again in a few minutes",
+            )
+
         row = await conn.fetchrow(
             "SELECT id, email, name, role, password_hash, active FROM users WHERE email = $1",
             req.email,

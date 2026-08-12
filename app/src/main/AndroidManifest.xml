@@ -12,6 +12,10 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- 통화 종료 감지용 (OFFHOOK→IDLE 전이 시점에 녹음 완성본 스캔 트리거) -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- 통화 상대 전화번호 읽기 (통화 종료 시 통화기록에서 번호 확보 → 번호별 검색용) -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
@@ -27,6 +31,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.Jjongpal">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -38,6 +43,7 @@
         <service
             android:name=".capture.notification.NotificationCaptureService"
             android:exported="true"
+            android:enabled="false"
             android:label="알림 캡처"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
@@ -63,6 +69,15 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 통화 종료 신호 — 앱이 꺼져 있어도 시스템이 깨워서 녹음 파일을 확인하게 함 -->
+        <receiver
+            android:name=".capture.call.CallStateReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE" />
             </intent-filter>
         </receiver>
 

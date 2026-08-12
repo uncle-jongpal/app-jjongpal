@@ -26,12 +26,27 @@ class TodoRepository @Inject constructor(
     }
 
     fun activeStream(): Flow<List<TodoEntity>> = dao.activeStream()
+    fun activeStreamByUser(userId: Int): Flow<List<TodoEntity>> = dao.activeStreamByUser(userId)
 
     fun suggestionsStream(): Flow<List<TodoEntity>> = dao.suggestionsStream()
+    fun suggestionsStreamByUser(userId: Int): Flow<List<TodoEntity>> = dao.suggestionsStreamByUser(userId)
+
+    fun parkedStream(): Flow<List<TodoEntity>> = dao.parkedStream()
+    fun parkedStreamByUser(userId: Int): Flow<List<TodoEntity>> = dao.parkedStreamByUser(userId)
 
     // 삼촌 제안 → 사용자가 '할 일로' 확정
     suspend fun accept(id: String) {
         dao.setStatus(id = id, status = "open", completedAt = null)
+    }
+
+    // 삼촌 제안 → 사용자가 '보류' (나중에 보려고 미뤄둠)
+    suspend fun park(id: String) {
+        dao.setStatus(id = id, status = "parked", completedAt = null)
+    }
+
+    // 보류함 → 다시 검토 목록(제안)으로 되돌림
+    suspend fun unpark(id: String) {
+        dao.setStatus(id = id, status = "suggested", completedAt = null)
     }
 
     // 삼촌 제안 → 사용자가 '넘기기'
@@ -64,6 +79,13 @@ class TodoRepository @Inject constructor(
             status = if (done) "done" else "open",
             completedAt = if (done) now else null,
         )
+    }
+
+    // 여러 할 일을 한 번에 완료 (날짜별 전체 완료 등)
+    suspend fun setDoneMany(ids: List<String>) {
+        if (ids.isEmpty()) return
+        val now = System.currentTimeMillis()
+        dao.setStatusMany(ids = ids, status = "done", completedAt = now, now = now)
     }
 
     suspend fun pullFromServer(): Int {
@@ -117,6 +139,7 @@ class TodoRepository @Inject constructor(
             dueAt = due_at?.let { parseIso(it) },
             relatedPerson = related_person,
             status = status,
+            priority = priority,
             completionConfidence = completion_confidence,
             createdAt = parseIso(created_at) ?: now,
             updatedAt = parseIso(updated_at) ?: now,
@@ -136,16 +159,18 @@ class TodoRepository @Inject constructor(
         due_at = dueAt?.let { iso(it) },
         related_person = relatedPerson,
         status = status,
+        priority = priority,
         completion_confidence = completionConfidence,
         created_at = iso(createdAt),
         updated_at = iso(updatedAt),
         completed_at = completedAt?.let { iso(it) },
     )
 
+    // ISO 8601 파싱 — 소수점초 없음/마이크로초/오프셋(+09:00·Z·-07:00) 모두 허용.
     private fun parseIso(s: String): Long? = try {
-        isoFormat.parse(s)?.time
+        java.time.OffsetDateTime.parse(s).toInstant().toEpochMilli()
     } catch (e: Exception) {
-        null
+        try { java.time.Instant.parse(s).toEpochMilli() } catch (e2: Exception) { null }
     }
 
     private fun iso(ms: Long): String = isoFormat.format(java.util.Date(ms))

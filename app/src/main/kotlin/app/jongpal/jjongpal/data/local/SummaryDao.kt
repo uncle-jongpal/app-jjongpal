@@ -26,4 +26,7 @@ interface SummaryDao {
 
     @Query("UPDATE summaries SET viewed = 1 WHERE id = :id")
     suspend fun markViewed(id: String)
+
+    @Query("UPDATE summaries SET pinned = :pinned WHERE id = :id")
+    suspend fun setPinned(id: String, pinned: Boolean)
 }

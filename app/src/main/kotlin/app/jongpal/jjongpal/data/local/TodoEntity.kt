@@ -21,7 +21,8 @@ data class TodoEntity(
     val sourceExcerpt: String? = null,              // 근거가 된 발화/알림 한 구절
     val dueAt: Long?,
     val relatedPerson: String?,
-    val status: String = "open",                    // 'open' | 'done' | 'archived' | 'suggested' | 'dismissed'
+    val status: String = "open",                    // 'open' | 'done' | 'archived' | 'suggested' | 'dismissed' | 'parked'
+    val priority: Float = 0f,                       // 비서가 매긴 중요도 0~1 (제안 정렬용)
     val completionConfidence: Float = 0f,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),

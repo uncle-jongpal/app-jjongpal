@@ -37,6 +37,13 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ACCESS_TOKEN_TTL_SEC: ${ACCESS_TOKEN_TTL_SEC}
       REFRESH_TOKEN_TTL_SEC: ${REFRESH_TOKEN_TTL_SEC}
+    healthcheck:
+      # "떠있지만 멈춘" 상태 감지 → docker ps / 베젤 모니터링에 (un)healthy 노출
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/auth/health',timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   upload-receiver:
     build: ./upload-receiver
@@ -47,6 +54,12 @@ services:
       STORAGE_ROOT: /storage
     volumes:
       - ${STORAGE_ROOT}:/storage
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/upload/health',timeout=3).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   whisper-worker:
     build: ./whisper-worker

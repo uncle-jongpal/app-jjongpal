@@ -148,12 +148,33 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
             scanMediaStore(reason, cb, ignoreWatermark)
             scanFallbackDirs(cb, reason, ignoreWatermark)
         }
+        maybeRescanRecent(cb)
+    }
+
+    /**
+     * 상시 재확인 — 하루 1회, 최근 7일치를 책갈피 무시하고 다시 훑는다.
+     *
+     * 책갈피(_ID) 방식은 "나중에 완성된 긴 녹음"을 영구히 놓칠 수 있다.
+     * (녹음 중 다른 통화가 먼저 올라가면 책갈피가 앞질러 감 — 2026-07-30 1시간 28분 녹음 누락 사례)
+     * 이미 올린 건 로컬 중복 방지로 무시되므로 재확인은 안전하다.
+     */
+    private suspend fun maybeRescanRecent(cb: (String, Long) -> Unit) {
+        val last = prefs.getLong(KEY_LAST_RESCAN_MS, 0L)
+        val now = System.currentTimeMillis()
+        if (now - last < RESCAN_INTERVAL_MS) return
+        scanMutex.withLock {
+            Timber.i("rescan-recent 시작 (최근 7일 재확인)")
+            scanMediaStore("rescan-recent", cb, ignoreWatermark = true, sinceMs = now - RESCAN_WINDOW_MS)
+            scanFallbackDirs(cb, "rescan-recent", ignoreWatermark = true, sinceMs = now - RESCAN_WINDOW_MS)
+        }
+        prefs.edit().putLong(KEY_LAST_RESCAN_MS, now).apply()
     }
 
     private suspend fun scanMediaStore(
         onScanReason: String,
         cb: (String, Long) -> Unit,
         ignoreWatermark: Boolean = false,
+        sinceMs: Long = 0L,
     ) {
         val resolver = context.contentResolver
         val projection = arrayOf(
@@ -221,6 +242,17 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                         if (id > maxId) maxId = id
                         continue
                     }
+                    // 재확인 모드 — 지정 시각 이전 파일은 건너뜀 (최근 것만 다시 본다)
+                    if (sinceMs > 0L && effectiveTsMs < sinceMs) {
+                        if (id > maxId) maxId = id
+                        continue
+                    }
+                    // 아직 쓰는 중인 파일 걸러내기 — 파일 크기가 안정된 뒤에만 등록.
+                    // (녹음 중인 파일을 미리 올려 잘린 내용이 저장되는 것 방지)
+                    if (!isSizeStable(data, size)) {
+                        if (id < pendingMinId) pendingMinId = id
+                        continue
+                    }
                     var consumed = false
                     try {
                         cb(data, effectiveTsMs)
@@ -249,11 +281,11 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         Timber.i("scanMediaStore reason=%s count=%d lastSeenId=%d", onScanReason, count, safeMax)
     }
 
-    private fun scanFallbackDirs(cb: (String, Long) -> Unit, reason: String, ignoreWatermark: Boolean = false) {
+    private fun scanFallbackDirs(cb: (String, Long) -> Unit, reason: String, ignoreWatermark: Boolean = false, sinceMs: Long = 0L) {
         val lastSeenMs = prefs.getLong(KEY_LAST_FILESCAN_MS, 0L)
         val installTsMs = prefs.getLong(KEY_INSTALL_TS_MS, 0L)
         // 백필 모드에선 시각 책갈피 무시하고 설치 이후 전체 — 묻힌 녹음 복구. 저장 책갈피는 뒤로 안 밀림.
-        val threshold = if (ignoreWatermark) installTsMs else maxOf(lastSeenMs, installTsMs)
+        val threshold = if (ignoreWatermark) maxOf(installTsMs, sinceMs) else maxOf(lastSeenMs, installTsMs)
         var maxMs = lastSeenMs
         // 콜백 실패한 가장 이른 시각 — 책갈피가 이를 넘으면 묻히므로 전진 상한.
         var pendingMinMs = Long.MAX_VALUE
@@ -298,11 +330,30 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                 lower.endsWith(".aac") || lower.endsWith(".3gp")
     }
 
+    /** 직전 스캔에서 본 파일 크기 — 두 번 연속 같아야 "다 쓰인 것"으로 본다 */
+    private val lastSeenSizes = HashMap<String, Long>()
+
+    private fun isSizeStable(path: String, size: Long): Boolean {
+        if (size <= 0L) return false
+        val prev = lastSeenSizes[path]
+        lastSeenSizes[path] = size
+        // 처음 본 파일이면 다음 스캔까지 보류, 크기가 그대로면 완성으로 판단
+        if (prev == null) return false
+        if (prev != size) return false
+        lastSeenSizes.remove(path)
+        return true
+    }
+
     companion object {
         private const val PREFS = "call_observer_state"
         private const val KEY_LAST_MEDIASTORE_ID = "last_mediastore_id"
         private const val KEY_LAST_FILESCAN_MS = "last_filescan_ms"
         private const val KEY_INSTALL_TS_MS = "install_ts_ms"
         private const val KEY_BACKFILL_V1_DONE = "backfill_v1_done"
+        private const val KEY_LAST_RESCAN_MS = "last_rescan_ms"
+        /** 상시 재확인 주기 — 하루 1회 */
+        private const val RESCAN_INTERVAL_MS = 24L * 60 * 60 * 1000
+        /** 재확인 범위 — 최근 7일치 녹음은 책갈피와 무관하게 다시 훑는다 */
+        const val RESCAN_WINDOW_MS = 7L * 24 * 60 * 60 * 1000
     }
 }

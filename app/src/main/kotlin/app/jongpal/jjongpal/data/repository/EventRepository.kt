@@ -55,10 +55,12 @@ class EventRepository @Inject constructor(
         filePath: String,
         durationSec: Int?,
         timestampMs: Long,
+        phoneNumber: String? = null,
     ) {
         val meta = mapOf<String, Any?>(
             "file_path" to filePath,
             "duration_sec" to durationSec,
+            "phone" to phoneNumber,
         )
         dao.insert(
             EventEntity(

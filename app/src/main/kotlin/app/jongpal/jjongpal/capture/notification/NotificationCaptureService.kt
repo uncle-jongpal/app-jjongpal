@@ -32,9 +32,12 @@ class NotificationCaptureService : NotificationListenerService() {
     companion object {
         // 같은 출처·본문 알림이 이 시간 안 다시 들어오면 무시 (음악·게임 등 갱신 반복 차단)
         private const val DEDUP_WINDOW_MS = 60_000L  // 60 초
+        // v2(통화 정리 전용)에서 알림 수집 비활성화 — 프라이버시. 코드·데이터는 보존, true 로 바꾸면 재활성.
+        private const val CAPTURE_ENABLED = false
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        if (!CAPTURE_ENABLED) return   // v2: 알림 수집 안 함 (모든 알림 열람·저장 표면 제거)
         if (sbn == null) return
         if (sbn.isOngoing) return
         if (sbn.packageName == applicationContext.packageName) return

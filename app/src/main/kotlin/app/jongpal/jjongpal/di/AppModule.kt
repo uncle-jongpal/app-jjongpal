@@ -21,7 +21,8 @@ object AppModule {
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "jjongpal.db")
-            .fallbackToDestructiveMigration()
+            .addMigrations(AppDatabase.MIGRATION_5_6)
+            // 기존 기록(업로드 상태 등)이 날아가면 안 되므로 파괴적 초기화는 쓰지 않는다
             .build()
 
     @Provides fun provideEventDao(db: AppDatabase): EventDao = db.eventDao()

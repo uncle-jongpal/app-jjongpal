@@ -157,11 +157,20 @@ async def insert_todos_and_appts(
         content_safe = content[:500]
         excerpt = (t.get("quote") or "").strip()[:200] or None
 
-        # 중복 방지: 같은 (user_id, content) 의 처리 대기 (open / suggested) 할 일이 이미 있으면 INSERT 안 함.
+        # 중요도 점수 — 0.3 미만(잡일·상대가 할 일)은 아예 제안 안 함. 누락 시 0.5 로 보수적 통과.
+        try:
+            importance = float(t.get("importance", 0.5))
+        except (TypeError, ValueError):
+            importance = 0.5
+        importance = max(0.0, min(1.0, importance))
+        if importance < 0.3:
+            continue
+
+        # 중복 방지: 같은 (user_id, content) 의 처리 대기 (open / suggested / parked) 할 일이 이미 있으면 INSERT 안 함.
         existing = await conn.fetchval(
             """
             SELECT id FROM todos
-            WHERE user_id = $1 AND content = $2 AND status IN ('open', 'suggested')
+            WHERE user_id = $1 AND content = $2 AND status IN ('open', 'suggested', 'parked')
             LIMIT 1
             """,
             user_id, content_safe,
@@ -169,15 +178,15 @@ async def insert_todos_and_appts(
         if existing:
             continue
 
-        # 삼촌이 찾은 할 일은 'suggested' (확인 대기) 로 들어감 — 사용자가 확인해야 목록에 올라감.
+        # 삼촌이 찾은 할 일은 'suggested' (확인 대기) 로 들어감 — 사용자가 확인해야 목록에 올라감. priority 높은 순으로 정렬됨.
         await conn.execute(
             """
-            INSERT INTO todos (id, user_id, content, source, source_event_id, source_excerpt, related_person, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'suggested')
+            INSERT INTO todos (id, user_id, content, source, source_event_id, source_excerpt, related_person, status, priority)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'suggested', $8)
             ON CONFLICT (id) DO NOTHING
             """,
             str(uuid4()), user_id, content_safe, source, source_event_id, excerpt,
-            (t.get("person") or None),
+            (t.get("person") or None), importance,
         )
         todo_count += 1
 

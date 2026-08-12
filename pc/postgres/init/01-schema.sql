@@ -69,7 +69,7 @@ CREATE TABLE audio_files (
     error_message       TEXT,
     uploaded_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at        TIMESTAMPTZ,
-    CONSTRAINT audio_files_status_chk CHECK (transcript_status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED'))
+    CONSTRAINT audio_files_status_chk CHECK (transcript_status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED', 'SKIPPED'))
 );
 
 CREATE INDEX idx_audio_status ON audio_files(transcript_status) WHERE transcript_status IN ('PENDING', 'PROCESSING');
@@ -87,7 +87,7 @@ CREATE TABLE transcripts (
     error_message   TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at    TIMESTAMPTZ,
-    CONSTRAINT transcripts_status_chk CHECK (summary_status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED'))
+    CONSTRAINT transcripts_status_chk CHECK (summary_status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED', 'SKIPPED'))
 );
 
 CREATE INDEX idx_transcripts_status ON transcripts(summary_status) WHERE summary_status IN ('PENDING', 'PROCESSING');
@@ -116,6 +116,7 @@ CREATE TABLE summaries (
     prompt_version_id   INTEGER REFERENCES prompt_versions(id),
     pushed              BOOLEAN NOT NULL DEFAULT FALSE,
     pushed_at           TIMESTAMPTZ,
+    pinned              BOOLEAN NOT NULL DEFAULT FALSE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -133,12 +134,13 @@ CREATE TABLE todos (
     due_at                  TIMESTAMPTZ,
     related_person          TEXT,
     status                  TEXT NOT NULL DEFAULT 'open',
+    priority                REAL NOT NULL DEFAULT 0.0,
     completion_confidence   REAL NOT NULL DEFAULT 0.0,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at            TIMESTAMPTZ,
-    -- 'suggested' = 삼촌이 찾았지만 사용자 확인 대기, 'dismissed' = 사용자가 넘김
-    CONSTRAINT todos_status_chk CHECK (status IN ('open', 'done', 'archived', 'suggested', 'dismissed'))
+    -- 'suggested' = 삼촌이 찾았지만 사용자 확인 대기, 'parked' = 사용자가 보류, 'dismissed' = 사용자가 넘김
+    CONSTRAINT todos_status_chk CHECK (status IN ('open', 'done', 'archived', 'suggested', 'dismissed', 'parked'))
 );
 
 CREATE INDEX idx_todos_user_status ON todos(user_id, status);

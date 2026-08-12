@@ -22,6 +22,7 @@ class SyncWorker @AssistedInject constructor(
     private val summaryRepository: SummaryRepository,
     private val appointmentRepository: AppointmentRepository,
     private val tokenManager: TokenManager,
+    private val syncStatusStore: SyncStatusStore,
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
@@ -51,9 +52,11 @@ class SyncWorker @AssistedInject constructor(
             val appts = appointmentRepository.pullFromServer()
             Timber.i("summaries pulled=%d appointments pulled=%d", sums, appts)
 
+            syncStatusStore.record(ok = true)
             Result.success()
         } catch (e: Exception) {
             Timber.e(e, "SyncWorker error")
+            syncStatusStore.record(ok = false)
             Result.retry()
         }
     }
