@@ -69,6 +69,13 @@ interface PcApi {
         @Query("limit") limit: Int = 2000,
     ): Response<List<SummaryDto>>
 
+    // 요약 1건만 조회 (정리 완료 푸시 알림 본문에 요약 첫 줄을 담기 위함)
+    @GET("rest/summaries")
+    suspend fun getSummaryById(
+        @Query("id") idEq: String,           // 예: "eq.<id>"
+        @Query("limit") limit: Int = 1,
+    ): Response<List<SummaryDto>>
+
     // 통화 원문(받아쓰기) — 문장별 시간 정보 포함. "이 문장부터 듣기" 기능용.
     @GET("rest/transcripts")
     suspend fun listTranscripts(

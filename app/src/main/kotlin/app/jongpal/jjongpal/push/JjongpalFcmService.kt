@@ -58,9 +58,18 @@ class JjongpalFcmService : FirebaseMessagingService() {
 
         if (!tokenManager.hasValidSession()) return
 
-        // 정리(요약) 완료 푸시 — 눌러서 그 통화 정리로 바로 가는 알림을 띄운다.
+        // 정리(요약) 완료 푸시 — 요약 첫 줄을 폰이 PC 에서 가져와 알림 본문에 담고, 눌러서 그 통화 정리로 이동.
         if (type == "summary_ready") {
-            showSummaryReady(message.data["summary_id"])
+            val summaryId = message.data["summary_id"]
+            scope.launch {
+                val snippet = try {
+                    fetchSummarySnippet(summaryId)
+                } catch (e: Exception) {
+                    Timber.w(e, "summary snippet fetch failed")
+                    null
+                }
+                showSummaryReady(summaryId, snippet)
+            }
         }
         // 일반 푸시는 트리거만. 본문은 폰이 PC 에서 다시 가져옴.
         syncScheduler.scheduleNow()
@@ -80,7 +89,19 @@ class JjongpalFcmService : FirebaseMessagingService() {
         )
     }
 
-    private fun showSummaryReady(summaryId: String?) {
+    /** 요약 본문 첫 줄(마크다운 헤더·기호 제거)을 알림에 쓸 짧은 스니펫으로. 실패하면 null. */
+    private suspend fun fetchSummarySnippet(summaryId: String?): String? {
+        if (summaryId.isNullOrBlank()) return null
+        val resp = pcApi.getSummaryById("eq.$summaryId")
+        val text = resp.body()?.firstOrNull()?.summary ?: return null
+        val line = text.lineSequence()
+            .map { it.trim().trimStart('#', ' ', '*', '-', '·', '>').trim() }
+            .firstOrNull { it.isNotBlank() }
+            ?: return null
+        return if (line.length > 80) line.take(78) + "…" else line
+    }
+
+    private fun showSummaryReady(summaryId: String?, snippet: String?) {
         val ch = "jjongpal_summary_ready"
         val nm = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -91,10 +112,12 @@ class JjongpalFcmService : FirebaseMessagingService() {
                 )
             }
         }
+        val body = if (!snippet.isNullOrBlank()) snippet else "눌러서 확인해요"
         val n = androidx.core.app.NotificationCompat.Builder(this, ch)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle("통화 정리 완료")
-            .setContentText("눌러서 확인해요")
+            .setContentText(body)
+            .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(mainPendingIntent(summaryId))
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
