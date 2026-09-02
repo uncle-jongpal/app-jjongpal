@@ -1,10 +1,6 @@
 FROM python:3.12-slim
 
-# faster-whisper 가 CTranslate2 (변환 도구) 백엔드. ffmpeg 필요 (오디오 디코딩).
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
-
+# 전달 전용 워커: 위스퍼 모델을 직접 돌리지 않으므로 ffmpeg/faster-whisper 불필요.
 WORKDIR /app
 
 COPY requirements.txt .
@@ -12,7 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY worker.py .
 
-ENV PYTHONUNBUFFERED=1 \
-    HF_HOME=/models/huggingface
+ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "worker.py"]

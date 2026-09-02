@@ -22,7 +22,7 @@ if [[ ! -f .env ]]; then
     cat > .env <<'EOF'
 # 에이전트 워커 환경변수 — 컴포즈의 디비를 호스트 노출 포트로 접근
 DATABASE_URL=postgres://jjongpal:REPLACE_ME@127.0.0.1:5432/jjongpal
-PROMPT_DIR=/home/REPLACE_USER/work/dev/jjongpal-app/pc/agent-worker/prompts
+PROMPT_DIR=/home/REPLACE_USER/work/prd/app-jjongpal/pc/agent-worker/prompts
 CLAUDE_BIN=claude
 AGENT_POLL_INTERVAL_SEC=10
 AGENT_BATCH_SIZE=3

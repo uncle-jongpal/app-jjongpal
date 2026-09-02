@@ -67,13 +67,10 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       STORAGE_ROOT: /storage
-      WHISPER_MODEL: ${WHISPER_MODEL}
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE}
-      WHISPER_DEVICE: ${WHISPER_DEVICE}
-      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE}
+      WHISPER_BACKEND_URL: ${WHISPER_BACKEND_URL:-}
     volumes:
       - ${STORAGE_ROOT}:/storage
-      - ./whisper-worker/models:/models
 
   fcm-pusher:
     build: ./fcm-pusher

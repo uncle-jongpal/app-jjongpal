@@ -39,3 +39,5 @@ docs/dev-log/*.md
 *.tmp
 *~
 *.swp
+pc/agent-worker/.venv/
+pc/monitor/state.json

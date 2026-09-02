@@ -1,0 +1,16 @@
+[Unit]
+Description=jjongpal-app 에이전트 워커 (호스트, 클로드 코드 헤드리스 호출)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/weplay/work/prd/app-jjongpal/pc/agent-worker
+EnvironmentFile=/home/weplay/work/prd/app-jjongpal/pc/agent-worker/.env
+Environment=PATH=/home/weplay/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/weplay/work/prd/app-jjongpal/pc/agent-worker/.venv/bin/python worker.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
