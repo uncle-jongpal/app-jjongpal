@@ -81,15 +81,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- 파이어베이스 메시징 -->
-        <service
-            android:name=".push.JjongpalFcmService"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
-            </intent-filter>
-        </service>
-
         <!-- Hilt + WorkManager 통합 (WorkManager 기본 초기화 비활성, Hilt 가 대신 처리) -->
         <provider
             android:name="androidx.startup.InitializationProvider"

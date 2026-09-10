@@ -37,7 +37,6 @@ class MainViewModel @Inject constructor(
     private val syncScheduler: SyncScheduler,
     private val tokenManager: TokenManager,
     private val syncStatusStore: SyncStatusStore,
-    private val pcApi: app.jongpal.jjongpal.data.remote.PcApi,
 ) : ViewModel() {
 
     // 마지막 동기화 결과 — 설정 화면 "PC 연결" 표시등이 관찰
@@ -154,7 +153,6 @@ class MainViewModel @Inject constructor(
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
-        ensureFcmTokenRegistered()
         refreshFailed()
         loadPhones()
     }
@@ -282,23 +280,5 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             summaryRepository.setPinned(id, pinned)
         }
-    }
-
-    /** 앱 시작 시 FCM 토큰을 서버 devices 에 올린다. 재설치 시 onNewToken 이 안 떠도 알림이 오게. */
-    private fun ensureFcmTokenRegistered() {
-        val deviceId = tokenManager.deviceId ?: return
-        if (!tokenManager.hasValidSession()) return
-        com.google.firebase.messaging.FirebaseMessaging.getInstance().token
-            .addOnSuccessListener { token ->
-                viewModelScope.launch {
-                    try {
-                        pcApi.patchDevice("eq.$deviceId",
-                            app.jongpal.jjongpal.data.remote.DevicePatch(fcm_token = token))
-                        timber.log.Timber.i("FCM 토큰 등록 완료")
-                    } catch (e: Exception) {
-                        timber.log.Timber.w(e, "FCM 토큰 등록 실패")
-                    }
-                }
-            }
     }
 }

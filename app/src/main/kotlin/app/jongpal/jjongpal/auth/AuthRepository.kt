@@ -1,6 +1,8 @@
 package app.jongpal.jjongpal.auth
 
 import android.os.Build
+import app.jongpal.jjongpal.util.ApiException
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -14,7 +16,8 @@ class AuthRepository @Inject constructor(
         return try {
             val resp = api.login(LoginRequest(email.trim(), password, deviceName, fcmToken))
             if (!resp.isSuccessful) {
-                Result.failure(Exception("login failed: ${resp.code()}"))
+                Timber.w("login failed status=%d", resp.code())
+                Result.failure(ApiException(resp.code()))
             } else {
                 val body = resp.body() ?: return Result.failure(Exception("empty body"))
                 tokenManager.accessToken = body.access_token

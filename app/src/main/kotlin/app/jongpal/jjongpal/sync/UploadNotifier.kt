@@ -87,10 +87,9 @@ class UploadNotifier(private val context: Context) {
         safeNotify(ID_RESULT, n)
     }
 
-    /** 업로드 실패 — 원인을 사람이 읽을 수 있게 */
-    fun failed(name: String, rawError: String?) {
+    /** 업로드 실패 — 이미 사람 말로 번역된 원인(중앙 매퍼 ErrorMessages 가 만든 문구)을 그대로 표시. */
+    fun failed(name: String, reason: String) {
         clearProgress()
-        val reason = humanReason(rawError)
         val n = NotificationCompat.Builder(context, CH_RESULT)
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle("통화 업로드 실패")
@@ -110,23 +109,5 @@ class UploadNotifier(private val context: Context) {
         private const val CH_RESULT = "upload_result"
         private const val ID_PROGRESS = 4101
         private const val ID_RESULT = 4200
-
-        /** 기계 오류 문구를 사람 말로 */
-        fun humanReason(raw: String?): String {
-            val e = (raw ?: "").lowercase()
-            return when {
-                e.contains("timeout") || e.contains("timed out") -> "시간 초과 (파일이 크거나 인터넷이 느림)"
-                e.contains("unable to resolve host") || e.contains("unknownhost") -> "서버에 연결할 수 없음 (인터넷 확인)"
-                e.contains("failed to connect") || e.contains("connect") -> "서버 연결 실패"
-                e.contains("file missing") -> "녹음 파일이 없음 (폰에서 지워졌을 수 있음)"
-                e.contains("no file_path") -> "녹음 파일 경로를 모름"
-                e.contains("401") || e.contains("403") -> "로그인이 만료됨 (앱에서 다시 로그인 필요)"
-                e.contains("413") -> "파일이 너무 커서 서버가 거부함"
-                e.contains("upload 5") -> "서버 오류 (잠시 후 다시 시도)"
-                e.contains("bytes but received") -> "업로드 중 파일이 바뀜 (녹음이 아직 끝나지 않았음)"
-                e.isBlank() -> "알 수 없는 오류"
-                else -> raw!!.take(60)
-            }
-        }
     }
 }

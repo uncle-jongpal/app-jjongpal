@@ -48,6 +48,13 @@ class TokenManager @Inject constructor(@ApplicationContext private val context: 
         get() = prefs.getString("device_id", null)
         set(value) { prefs.edit().putString("device_id", value).apply() }
 
+    // 로컬 요약 폴링용 "마지막으로 본 요약" 마커 — 가장 최신 요약의 created_at(epoch millis).
+    // 이 값보다 created_at 이 큰 요약만 새 것으로 보고 알림을 띄운다.
+    // 0(미설정)이면 첫 실행/로그인 직후로 보고, 알림 없이 현재 최신값으로 초기화(과거 요약 밀림 방지).
+    var lastSeenSummaryAt: Long
+        get() = prefs.getLong("last_seen_summary_at", 0L)
+        set(value) { prefs.edit().putLong("last_seen_summary_at", value).apply() }
+
     // 어드민의 "모든 사용자 데이터 보기" 토글. 기본값: 꺼짐.
     // 일반 사용자는 RLS 가 자동으로 본인 데이터만 노출하므로 의미 없음.
     var showAllUsersForAdmin: Boolean

@@ -2,10 +2,13 @@ package app.jongpal.jjongpal.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.jongpal.jjongpal.util.ErrorContext
+import app.jongpal.jjongpal.util.ErrorMessages
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 data class AuthUiState(
@@ -20,6 +23,7 @@ data class AuthUiState(
 class AuthViewModel @Inject constructor(
     private val repo: AuthRepository,
     private val tokenManager: TokenManager,
+    private val sessionManager: SessionManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -30,6 +34,16 @@ class AuthViewModel @Inject constructor(
         )
     )
     val state: StateFlow<AuthUiState> = _state
+
+    init {
+        // 토큰 재발급 실패로 세션이 무효화되면 로그인 화면으로 되돌리고 안내 문구 표시.
+        viewModelScope.launch {
+            sessionManager.sessionInvalidated.collect {
+                tokenManager.clear()
+                _state.value = AuthUiState(loggedIn = false, errorMessage = "다시 로그인해주세요")
+            }
+        }
+    }
 
     fun login(email: String, password: String) {
         if (email.isBlank() || password.isBlank()) {
@@ -42,8 +56,9 @@ class AuthViewModel @Inject constructor(
             r.onSuccess { user ->
                 _state.value = AuthUiState(loggedIn = true, userName = user.name, userId = user.id)
             }.onFailure { e ->
-                val msg = e.message ?: "알 수 없는 오류"
-                _state.value = _state.value.copy(loading = false, errorMessage = "로그인 실패: $msg")
+                Timber.w(e, "login error")
+                val msg = ErrorMessages.friendly(e, ErrorContext.LOGIN)
+                _state.value = _state.value.copy(loading = false, errorMessage = msg)
             }
         }
     }

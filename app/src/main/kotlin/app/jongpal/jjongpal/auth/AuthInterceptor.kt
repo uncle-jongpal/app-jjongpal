@@ -17,6 +17,7 @@ import javax.inject.Singleton
 @Singleton
 class AuthInterceptor @Inject constructor(
     private val tokenManager: TokenManager,
+    private val sessionManager: SessionManager,
     moshi: Moshi,
 ) : Interceptor {
 
@@ -84,7 +85,11 @@ class AuthInterceptor @Inject constructor(
             refreshClient.newCall(req).execute().use { r ->
                 if (!r.isSuccessful) {
                     Timber.w("refresh failed status=${r.code}")
-                    if (r.code == 401) tokenManager.clear()
+                    // 리프레시 토큰까지 거부(401) → 세션 회생 불가. 토큰 비우고 화면에 재로그인 신호.
+                    if (r.code == 401) {
+                        tokenManager.clear()
+                        sessionManager.notifySessionInvalidated()
+                    }
                     return false
                 }
                 val rb = r.body?.string() ?: return false

@@ -6,7 +6,6 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt.android)
-    alias(libs.plugins.googleServices)
 }
 
 kotlin {
@@ -30,8 +29,8 @@ android {
         applicationId = "app.jongpal.jjongpal"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.5.3"
+        versionCode = 14
+        versionName = "0.5.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -111,9 +110,6 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
     implementation(libs.timber)
-
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.messaging)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

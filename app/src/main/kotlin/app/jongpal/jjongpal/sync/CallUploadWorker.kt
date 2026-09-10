@@ -9,6 +9,8 @@ import app.jongpal.jjongpal.data.local.EventDao
 import app.jongpal.jjongpal.data.remote.EventMetaPatch
 import app.jongpal.jjongpal.data.remote.PcApi
 import app.jongpal.jjongpal.data.remote.UploadApi
+import app.jongpal.jjongpal.util.ErrorContext
+import app.jongpal.jjongpal.util.ErrorMessages
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import dagger.assisted.Assisted
@@ -141,16 +143,17 @@ class CallUploadWorker @AssistedInject constructor(
                     // 사용자 통화 녹음 원본은 절대 삭제하지 않음. 업로드는 사본만 보냄.
                     ok++
                 } else {
-                    val err = "upload ${resp.code()}"
-                    eventDao.updateSync(event.id, "FAILED", null, err, 1)
-                    notifier.failed(file.name, err)
+                    // 원본 코드는 로그·DB 에만. 사용자 알림엔 중앙 매퍼가 만든 친절한 문구만.
+                    Timber.w("upload failed status=%d for %s", resp.code(), file.name)
+                    eventDao.updateSync(event.id, "FAILED", null, "upload ${resp.code()}", 1)
+                    notifier.failed(file.name, ErrorMessages.forCode(resp.code(), ErrorContext.SYNC))
                     failed++
                 }
             } catch (e: Exception) {
                 Timber.e(e, "upload error for %s", filePath)
                 val err = e.message ?: e.javaClass.simpleName
                 eventDao.updateSync(event.id, "FAILED", null, err, 1)
-                notifier.failed(file.name, err)
+                notifier.failed(file.name, ErrorMessages.friendly(e, ErrorContext.SYNC))
                 failed++
             } finally {
                 try { snapshot.delete() } catch (_: Exception) {}

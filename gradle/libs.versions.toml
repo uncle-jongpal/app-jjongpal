@@ -32,10 +32,6 @@ securityCrypto = "1.1.0-alpha06"
 # Timber
 timber = "5.0.1"
 
-# Google Services + Firebase
-googleServices = "4.4.2"
-firebaseBom = "33.7.0"
-
 # Testing
 junit = "4.13.2"
 androidxJunit = "1.1.5"
@@ -88,10 +84,6 @@ androidx-security-crypto = { group = "androidx.security", name = "security-crypt
 # Timber
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 
-# Firebase
-firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
-firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging-ktx" }
-
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
@@ -103,4 +95,3 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt-android = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
-googleServices = { id = "com.google.gms.google-services", version.ref = "googleServices" }

@@ -41,8 +41,12 @@ class FileObserverService : Service() {
     @Inject lateinit var eventRepository: EventRepository
     @Inject lateinit var tokenManager: TokenManager
     @Inject lateinit var syncScheduler: SyncScheduler
+    @Inject lateinit var summaryNotifier: app.jongpal.jjongpal.push.SummaryNotifier
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // 새 통화 요약 로컬 알림 폴링 루프 — onStartCommand 가 여러 번 불려도 한 번만 띄운다.
+    @Volatile private var pollingStarted = false
 
     // 통화 상태 감시 — OFFHOOK(통화중) → IDLE(종료) 전이 시점에 녹음 완성본 스캔 트리거.
     private var telephonyManager: TelephonyManager? = null
@@ -56,6 +60,7 @@ class FileObserverService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
         registerCallStateDetector()
+        startSummaryPolling()
         observer.start { filePath, ts ->
             if (!tokenManager.hasValidSession()) {
                 Timber.d("skipping call file (no session): %s", filePath)
@@ -81,6 +86,23 @@ class FileObserverService : Service() {
         unregisterCallStateDetector()
         observer.stop()
         super.onDestroy()
+    }
+
+    // 새 통화 요약 로컬 알림 폴링 — 이 포그라운드 서비스가 어차피 상시 떠 있으니 여기 얹는다.
+    // FCM(서버 푸시) 대체: 몇 분 간격으로 서버에서 요약 목록을 받아 새 것만 로컬 알림.
+    private fun startSummaryPolling() {
+        if (pollingStarted) return
+        pollingStarted = true
+        scope.launch {
+            while (true) {
+                try {
+                    summaryNotifier.checkAndNotify()
+                } catch (e: Exception) {
+                    Timber.w(e, "summary polling check failed")
+                }
+                delay(SUMMARY_POLL_INTERVAL_MS)
+            }
+        }
     }
 
     // 통화 종료 감지기 등록. API 31+ 는 TelephonyCallback, 그 이하는 PhoneStateListener.
@@ -234,6 +256,8 @@ class FileObserverService : Service() {
         private const val NOTIF_ID = 7001
         // 통화 종료 후 녹음기 최종화(파일 닫기·moov 기록) 대기 시간. 너무 짧으면 아직 안 닫힌 토막을 봄.
         private const val CALL_END_SETTLE_MS = 8_000L
+        // 새 통화 요약 확인 주기 (FCM 대체 로컬 폴링). 약 3분.
+        private const val SUMMARY_POLL_INTERVAL_MS = 3 * 60_000L
 
         fun start(context: Context) {
             val intent = Intent(context, FileObserverService::class.java)
