@@ -14,7 +14,7 @@ ENV_FILE = os.path.join(HERE, "..", "agent-worker", ".env")
 STATE_FILE = os.path.join(HERE, "state.json")
 WEBHOOK = os.environ.get("JJ_ALERT_WEBHOOK", "")
 FCM_PROJECT = os.environ.get("FIREBASE_PROJECT_ID", "jjongpal-app")
-FCM_CRED = os.environ.get("FIREBASE_CREDENTIALS", "/home/weplay/work/prd/app-jjongpal/pc/fcm-pusher/service-account.json")
+FCM_CRED = os.environ.get("FIREBASE_CREDENTIALS", "/home/agent/work/prd/app-jjongpal/pc/fcm-pusher/service-account.json")
 FCM_ENDPOINT = f"https://fcm.googleapis.com/v1/projects/{FCM_PROJECT}/messages:send"
 _fcm_creds = None
 _PHONE_TOKENS = []
@@ -29,8 +29,8 @@ def _fcm_access_token():
     if not _fcm_creds.valid:
         _fcm_creds.refresh(GReq())
     return _fcm_creds.token
-CLAUDE_BIN = "/home/weplay/.nvm/versions/node/v22.22.0/bin/claude"
-CLAUDE_CFG = "/home/weplay/.claude-jjongpal"
+CLAUDE_BIN = "/home/agent/.nvm/versions/node/v22.22.0/bin/claude"
+CLAUDE_CFG = "/home/agent/.claude-jjongpal"
 
 # 임계값
 SUMMARY_STALL_H   = 3     # 요약 대기가 이만큼 밀리면 위험
@@ -193,7 +193,7 @@ async def main():
     transition("auth_dead", not auth_ok, "인증이 끊겼어",
                [f"헤드리스 클로드 호출 실패 → **요약이 전부 실패**하게 돼.",
                 f"오류: `{auth_err}`",
-                "→ 운영서버에서 `CLAUDE_CONFIG_DIR=/home/weplay/.claude-jjongpal claude` 로 재로그인 필요"])
+                "→ 운영서버에서 `CLAUDE_CONFIG_DIR=/home/agent/.claude-jjongpal claude` 로 재로그인 필요"])
     transition("summary_stall", summary_stall, "요약이 밀려 있어",
                [f"대기 **{s['waiting']}건**, 가장 오래된 게 **{s['oldest_h']:.1f}시간째**.",
                 "워커가 살아 있어도 결과가 안 나오는 상황일 수 있어."])

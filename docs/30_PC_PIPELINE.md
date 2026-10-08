@@ -110,7 +110,7 @@ jjongpal-app/pc/
 └── cloudflared/
     └── config.yml
 
-~/storage/jjongpal/
+~/work/prd/app-jjongpal/storage/
 ├── audio/                   # 통화 파일 (텍스트 변환 후 즉시 삭제)
 └── transcripts/             # 텍스트 (영구 보관)
 ```
@@ -358,7 +358,7 @@ $$ LANGUAGE plpgsql;
 흐름:
 1. JWT 검증 → 사용자 ID
 2. `events` 에 type='call' 행 삽입 (없으면)
-3. 디스크 저장 (`~/storage/jjongpal/audio/<user_id>/<YYYY-MM-DD>/<event_id>.m4a`)
+3. 디스크 저장 (`~/work/prd/app-jjongpal/storage/audio/<user_id>/<YYYY-MM-DD>/<event_id>.m4a`)
 4. `audio_files` 등록 (transcript_status='PENDING')
 
 ## 7. whisper 워커

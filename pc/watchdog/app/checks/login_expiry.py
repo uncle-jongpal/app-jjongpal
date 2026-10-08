@@ -88,7 +88,7 @@ class LoginExpiryCheck(Check):
             lines=[
                 "헤드리스 클로드 호출 실패 → **요약이 전부 실패**하게 돼.",
                 f"오류: `{err}`",
-                "→ 운영서버에서 `CLAUDE_CONFIG_DIR=/home/weplay/.claude-jjongpal claude` 로 재로그인 필요",
+                "→ 운영서버에서 `CLAUDE_CONFIG_DIR=/home/agent/.claude-jjongpal claude` 로 재로그인 필요",
             ],
             level="crit",
         )

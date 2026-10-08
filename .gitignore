@@ -41,3 +41,21 @@ docs/dev-log/*.md
 *.swp
 pc/agent-worker/.venv/
 pc/monitor/state.json
+pc/watchdog-state/
+
+# 비밀 env 와 그 백업(.env.*, .env.bak-*) 은 저장소에 넣지 않음 · 예시 파일만 허용
+**/.env*
+!**/.env.example
+pc/agent-worker/.env
+pc/monitor/.env
+# 운영 컨테이너 env (비밀 포함) — 2026-09-30 컨테이너 이름 표준화
+pc/.env.*.prd
+
+# 옛 백업 사본(*.bak*)
+*.bak
+*.bak-*
+*.bak.*
+*.bak2
+
+# 녹음 저장소(운영 데이터, 2026-10-08 ~/storage/jjongpal 에서 옮김)
+/storage/

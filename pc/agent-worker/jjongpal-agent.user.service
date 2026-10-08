@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/weplay/work/prd/app-jjongpal/pc/agent-worker
-EnvironmentFile=/home/weplay/work/prd/app-jjongpal/pc/agent-worker/.env
-Environment=PATH=/home/weplay/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/weplay/work/prd/app-jjongpal/pc/agent-worker/.venv/bin/python worker.py
+WorkingDirectory=/home/agent/work/prd/app-jjongpal/pc/agent-worker
+EnvironmentFile=/home/agent/work/prd/app-jjongpal/pc/agent-worker/.env
+Environment=PATH=/home/agent/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/agent/work/prd/app-jjongpal/pc/agent-worker/.venv/bin/python worker.py
 Restart=on-failure
 RestartSec=10
 

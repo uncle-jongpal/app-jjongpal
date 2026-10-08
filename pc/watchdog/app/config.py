@@ -84,7 +84,7 @@ def load() -> Config:
         retry_max=_int("WATCHDOG_RETRY_MAX", 3),
         retry_wait_min=_int("WATCHDOG_RETRY_WAIT_MIN", 30),
         auth_enabled=_str("WATCHDOG_AUTH_ENABLED", "false").lower() in ("1", "true", "yes"),
-        claude_bin=_str("CLAUDE_BIN", "/home/weplay/.nvm/versions/node/v22.22.0/bin/claude"),
-        claude_config_dir=_str("CLAUDE_CONFIG_DIR", "/home/weplay/.claude-jjongpal"),
+        claude_bin=_str("CLAUDE_BIN", "/home/agent/.nvm/versions/node/v22.22.0/bin/claude"),
+        claude_config_dir=_str("CLAUDE_CONFIG_DIR", "/home/agent/.claude-jjongpal"),
         log_level=_str("WATCHDOG_LOG_LEVEL", "INFO"),
     )

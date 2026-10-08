@@ -32,7 +32,7 @@ cp .env.example .env
 #  - POSTGRES_PASSWORD: 랜덤 32자
 #  - JWT_SECRET: 랜덤 64자 (openssl rand -hex 32 등)
 #  - PUBLIC_BASE_URL: 본인 서브도메인 (예: https://samchon.uncle-jongpal.com)
-#  - STORAGE_ROOT: 통화 파일 저장 디렉토리 (예: $HOME/storage/jjongpal)
+#  - STORAGE_ROOT: 통화 파일 저장 디렉토리 (예: $HOME/work/prd/app-jjongpal/storage)
 #  - FIREBASE_PROJECT_ID: 파이어베이스 프로젝트 ID
 ```
 
