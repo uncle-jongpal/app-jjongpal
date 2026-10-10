@@ -58,3 +58,6 @@ FCM_BATCH_SIZE = int(os.environ.get("FCM_BATCH_SIZE", "10"))
 # auth/upload/rest/workers 가 공유하는 단일 asyncpg 풀.
 DB_POOL_MIN = int(os.environ.get("DB_POOL_MIN", "2"))
 DB_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "10"))
+# 디비 문장 하나의 최대 대기(초). 연결이 소리 없이 끊긴(반쯤 열린) 경우 무한 대기 방지.
+# 2026-10-09 디비 연결 리셋 후 받아쓰기 워커가 로그 없이 19시간 멈춘 사고 재발 방지.
+DB_COMMAND_TIMEOUT_SEC = float(os.environ.get("DB_COMMAND_TIMEOUT_SEC", "60"))

@@ -38,6 +38,9 @@ async def init_pool() -> None:
         config.DATABASE_URL,
         min_size=config.DB_POOL_MIN,
         max_size=config.DB_POOL_MAX,
+        command_timeout=config.DB_COMMAND_TIMEOUT_SEC,
+        # 오래 놀던 연결은 버리고 새로 맺음(끊긴 연결 재사용 방지)
+        max_inactive_connection_lifetime=300,
     )
 
 

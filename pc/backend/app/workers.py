@@ -171,28 +171,31 @@ async def whisper_loop() -> None:
 
     while True:
         try:
+            # 2026-10-10: 연결을 영원히 붙잡지 않고 매 회차 새로 빌림. 끊긴 연결에 묶여
+            # 로그 없이 멈추던 문제(10/09 리셋 후 19시간 정지) 방지. 문장 시간 제한은 풀 설정(command_timeout).
+            backoff = 0.0
             async with db.pool.acquire() as conn:
-                while True:
-                    rows = await conn.fetch(
-                        """
-                        SELECT id, file_path, event_id, user_id
-                        FROM audio_files
-                        WHERE transcript_status = 'PENDING' AND file_path IS NOT NULL
-                        ORDER BY uploaded_at
-                        LIMIT $1
-                        """,
-                        config.WHISPER_BATCH_SIZE,
-                    )
-                    if not rows:
-                        await asyncio.sleep(config.WHISPER_POLL_INTERVAL_SEC)
-                        continue
-                    for row in rows:
-                        try:
-                            await whisper_process_one(conn, row)
-                        except TransientBackendError:
-                            # 원격 서버 복귀 대기 후 재폴링(row 는 이미 PENDING 으로 되돌려짐)
-                            await asyncio.sleep(config.WHISPER_BACKEND_BACKOFF_SEC)
-                            break
+                rows = await conn.fetch(
+                    """
+                    SELECT id, file_path, event_id, user_id
+                    FROM audio_files
+                    WHERE transcript_status = 'PENDING' AND file_path IS NOT NULL
+                    ORDER BY uploaded_at
+                    LIMIT $1
+                    """,
+                    config.WHISPER_BATCH_SIZE,
+                )
+                for row in rows:
+                    try:
+                        await whisper_process_one(conn, row)
+                    except TransientBackendError:
+                        # 원격 서버 복귀 대기 후 재폴링(row 는 이미 PENDING 으로 되돌려짐)
+                        backoff = config.WHISPER_BACKEND_BACKOFF_SEC
+                        break
+            if backoff:
+                await asyncio.sleep(backoff)
+            elif not rows:
+                await asyncio.sleep(config.WHISPER_POLL_INTERVAL_SEC)
         except asyncio.CancelledError:
             raise
         except (asyncpg.PostgresConnectionError, ConnectionResetError, OSError) as e:
