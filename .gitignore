@@ -59,3 +59,6 @@ pc/.env.*.prd
 
 # 녹음 저장소(운영 데이터, 2026-10-08 ~/storage/jjongpal 에서 옮김)
 /storage/
+
+# 빌드한 설치파일 보관(저장소 제외)
+/releases/
