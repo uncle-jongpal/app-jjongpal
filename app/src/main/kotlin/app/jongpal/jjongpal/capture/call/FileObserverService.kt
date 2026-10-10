@@ -42,6 +42,7 @@ class FileObserverService : Service() {
     @Inject lateinit var tokenManager: TokenManager
     @Inject lateinit var syncScheduler: SyncScheduler
     @Inject lateinit var summaryNotifier: app.jongpal.jjongpal.push.SummaryNotifier
+    @Inject lateinit var alertNotifier: app.jongpal.jjongpal.push.AlertNotifier
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -99,6 +100,12 @@ class FileObserverService : Service() {
                     summaryNotifier.checkAndNotify()
                 } catch (e: Exception) {
                     Timber.w(e, "summary polling check failed")
+                }
+                // 서버 장애 알림(받아쓰기 밀림 등)도 같은 주기로 확인 (2026-10-10, FCM 대체)
+                try {
+                    alertNotifier.checkAndNotify()
+                } catch (e: Exception) {
+                    Timber.w(e, "alert polling check failed")
                 }
                 delay(SUMMARY_POLL_INTERVAL_MS)
             }

@@ -71,6 +71,7 @@ COLUMNS = {
         "event_id", "type", "stage", "error_message", "label", "occurred_at",
         "failed_at",
     ],
+    "app_alerts": ["id", "level", "title", "body", "created_at"],
 }
 
 # 테이블별 정렬 허용 컬럼 화이트리스트 (order 파라미터 주입 방지)
@@ -81,6 +82,7 @@ ORDER_WHITELIST = {
     "transcripts": {"created_at"},
     "events": {"timestamp", "device_timestamp"},
     "failed_items": {"occurred_at", "failed_at"},
+    "app_alerts": {"id", "created_at"},
 }
 
 # PostgREST 비교 연산자 → SQL 연산자
@@ -529,6 +531,34 @@ async def list_failed(
         idx += 1
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     return await _run_select(claims, "failed_items", cols, where_sql, args, col, direction, lim)
+
+
+# ===== app_alerts (장애 알림함, 2026-10-10) =====
+# 앱이 요약 폴링 때 같이 조회 → 새 장애 알림을 로컬 알림으로 띄움. RLS 로 어드민만 보임.
+@router.get("/rest/app_alerts")
+async def list_app_alerts(
+    id: Optional[str] = Query(None),          # "gt.<마지막으로 본 id>"
+    select: Optional[str] = Query(None),
+    order: Optional[str] = Query(None),
+    limit: Optional[int] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    claims = get_claims(authorization)
+    cols = select_columns("app_alerts", select)
+    col, direction = parse_order(order, "app_alerts", "id", "desc")
+    lim = parse_limit(limit, 20)
+    where, args, idx = [], [], 1
+    if id:
+        op, val = parse_op(id)
+        try:
+            val = int(val)
+        except (TypeError, ValueError):
+            val = 0
+        where.append(f"id {op} ${idx}")
+        args.append(val)
+        idx += 1
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    return await _run_select(claims, "app_alerts", cols, where_sql, args, col, direction, lim)
 
 
 # ===== rpc =====

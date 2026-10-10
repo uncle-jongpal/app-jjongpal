@@ -59,8 +59,19 @@ class Alerter:
         body_text = "\n".join(lines)[:900].replace("**", "").replace("`", "")
         log.info("[알림 %s] %s | %s", level, title, body_text[:80])
 
+        # 2026-10-10: 앱(0.5.7~)은 FCM 대신 이 알림함을 폴링해 로컬 알림을 띄운다 → 항상 먼저 기록.
+        await self._save_app_alert(title, body_text, level)
         await self._push_fcm(title, body_text, level)
         await self._post_webhook(title, lines, level)
+
+    async def _save_app_alert(self, title: str, body_text: str, level: str) -> None:
+        try:
+            await self.db.execute(
+                "INSERT INTO app_alerts (level, title, body) VALUES ($1, $2, $3)",
+                level, f"쫑팔 · {title}", body_text,
+            )
+        except Exception as e:
+            log.warning("앱 알림함 기록 실패: %s", e)
 
     async def _push_fcm(self, title: str, body_text: str, level: str) -> None:
         tokens = await self._phone_tokens()

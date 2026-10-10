@@ -130,6 +130,15 @@ interface PcApi {
         @Query("stage") stage: String = "neq.event",   // v2: 알림(event) 실패 제외, 통화만
     ): Response<List<FailedItemDto>>
 
+    // 장애 알림함 (2026-10-10) — 서버 감시(watchdog)가 남긴 장애 알림. 어드민만 보임(RLS).
+    // id=gt.<마지막으로 본 id> 로 새 것만 받는다.
+    @GET("rest/app_alerts")
+    suspend fun listAppAlerts(
+        @Query("id") idGt: String? = null,
+        @Query("order") order: String = "id.asc",
+        @Query("limit") limit: Int = 20,
+    ): Response<List<AppAlertDto>>
+
     // 수동 재시도 — 해당 건의 FAILED 상태를 PENDING 으로 되돌림 (PROCESSING 은 안 건드림).
     // 되돌린 행이 있으면 (stage, reset_count) 행을 반환. 되돌릴 게 없으면 빈 배열 → 실제 재시도 아님.
     @POST("rest/rpc/retry_failed_item")
@@ -251,6 +260,15 @@ data class FailedItemDto(
     val error_message: String? = null,
     val label: String? = null,
     val occurred_at: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class AppAlertDto(
+    val id: Long,
+    val level: String? = null,        // crit | warn | info | ok
+    val title: String,
+    val body: String? = null,
+    val created_at: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

@@ -55,6 +55,11 @@ class TokenManager @Inject constructor(@ApplicationContext private val context: 
         get() = prefs.getLong("last_seen_summary_at", 0L)
         set(value) { prefs.edit().putLong("last_seen_summary_at", value).apply() }
 
+    // 장애 알림함 폴링용 "마지막으로 본 알림 id". -1(미설정)이면 첫 실행으로 보고 알림 없이 최신 id 로 초기화.
+    var lastSeenAlertId: Long
+        get() = prefs.getLong("last_seen_alert_id", -1L)
+        set(value) { prefs.edit().putLong("last_seen_alert_id", value).apply() }
+
     // 어드민의 "모든 사용자 데이터 보기" 토글. 기본값: 꺼짐.
     // 일반 사용자는 RLS 가 자동으로 본인 데이터만 노출하므로 의미 없음.
     var showAllUsersForAdmin: Boolean
