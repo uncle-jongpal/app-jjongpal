@@ -29,8 +29,8 @@ android {
         applicationId = "app.jongpal.jjongpal"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.5.7"
+        versionCode = 16
+        versionName = "0.5.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

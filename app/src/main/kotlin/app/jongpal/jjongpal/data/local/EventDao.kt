@@ -57,8 +57,9 @@ interface EventDao {
 
     // 업로드 중 파일이 자라나 크기 불일치로 실패 후 재시도 소진된 통화 재등록 (파일 안정 후 재업로드용).
     // 재등록되면 syncStatus 가 PENDING 으로 바뀌어 이 조건에서 빠지므로 반복 등록 안 됨.
-    @Query("UPDATE events SET syncStatus = 'PENDING', retryCount = 0, lastError = NULL WHERE type = 'call' AND syncStatus = 'FAILED' AND lastError LIKE '%bytes but received%'")
-    suspend fun requeueSizeMismatchCalls(): Int
+    // (0.5.8) 한도를 소진한 것만 — 매번 0으로 되돌리면 연속 실패 횟수가 안 쌓여 실패 알림이 영영 안 뜬다.
+    @Query("UPDATE events SET syncStatus = 'PENDING', retryCount = 0, lastError = NULL WHERE type = 'call' AND syncStatus = 'FAILED' AND retryCount >= :maxRetry AND lastError LIKE '%bytes but received%'")
+    suspend fun requeueSizeMismatchCalls(maxRetry: Int = 5): Int
 
     /**
      * 업로드에 실패해 재시도 한도를 소진한 통화를 다시 대기 상태로 되돌린다.
@@ -66,14 +67,17 @@ interface EventDao {
      * 통화는 개수가 적고 하나하나가 소중하므로 **영구 포기하지 않는다.**
      * (2026-07-30 83MB 녹음이 시간 초과로 6번 실패한 뒤 그대로 묻힌 사례)
      * 단 파일 자체가 없는 경우는 되살려도 소용없으므로 제외한다.
+     *
+     * 한도(:maxRetry)를 **소진한 것만** 되살린다 — 예전엔 매번 실패 건 전부를 0으로 되돌려
+     * 연속 실패 횟수가 쌓이지 않았다(0.5.8 "3번 연속 실패 시에만 알림"이 이 횟수를 쓴다).
      */
     @Query("""
         UPDATE events SET syncStatus = 'PENDING', retryCount = 0, lastError = NULL
-        WHERE type = 'call' AND syncStatus = 'FAILED'
+        WHERE type = 'call' AND syncStatus = 'FAILED' AND retryCount >= :maxRetry
           AND COALESCE(lastError,'') NOT LIKE '%file missing%'
           AND COALESCE(lastError,'') NOT LIKE '%no file_path%'
     """)
-    suspend fun requeueFailedCalls(): Int
+    suspend fun requeueFailedCalls(maxRetry: Int = 5): Int
 
     /** 업로드 못 한 통화 수 — 앱 화면에 실패가 보이게 하기 위함 */
     @Query("SELECT COUNT(*) FROM events WHERE type='call' AND syncStatus != 'SYNCED'")
