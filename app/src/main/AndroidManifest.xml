@@ -61,7 +61,7 @@
                 android:value="call_recording_file_observer" />
         </service>
 
-        <!-- 부팅 후 자동 시작 -->
+        <!-- 부팅 후 / 앱 업데이트 후 자동 시작 -->
         <receiver
             android:name=".capture.call.BootReceiver"
             android:enabled="true"
@@ -69,6 +69,8 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <!-- 앱 업데이트 직후에도 감시 서비스 재시작 (업데이트하면 서비스가 죽고 앱을 열 때까지 안 살아났음) -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
