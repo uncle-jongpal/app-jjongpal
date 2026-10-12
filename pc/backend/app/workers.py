@@ -277,6 +277,26 @@ async def whisper_process_one(conn: asyncpg.Connection, row: asyncpg.Record) -> 
         )
 
 
+async def fetch_pending_audio(conn: asyncpg.Connection) -> list:
+    """받아쓰기 대기열에서 이번 회차에 처리할 행들.
+    시도 횟수 적은 것 먼저 → 독 파일이 대기열 맨 앞을 영원히 막지 않음.
+    일시 오류로 되돌아온 건(attempt>0)은 WHISPER_RETRY_DELAY_SEC 지난 뒤에만 다시 집음."""
+    return await conn.fetch(
+        """
+        SELECT id, file_path, event_id, user_id
+        FROM audio_files
+        WHERE transcript_status = 'PENDING' AND file_path IS NOT NULL
+          AND (COALESCE(attempt_count, 0) = 0
+               OR processing_at IS NULL
+               OR processing_at < NOW() - make_interval(secs => $2))
+        ORDER BY COALESCE(attempt_count, 0), uploaded_at
+        LIMIT $1
+        """,
+        config.WHISPER_BATCH_SIZE,
+        float(config.WHISPER_RETRY_DELAY_SEC),
+    )
+
+
 async def whisper_loop() -> None:
     if not config.WHISPER_BACKEND_URL:
         log.error("WHISPER_BACKEND_URL 미설정 — whisper 전달 워커 비활성(앱은 계속 뜸).")
@@ -289,22 +309,7 @@ async def whisper_loop() -> None:
             # 로그 없이 멈추던 문제(10/09 리셋 후 19시간 정지) 방지. 문장 시간 제한은 풀 설정(command_timeout).
             backoff = 0.0
             async with db.pool.acquire() as conn:
-                # 시도 횟수 적은 것 먼저 → 독 파일이 대기열 맨 앞을 영원히 막지 않음.
-                # 일시 오류로 되돌아온 건(attempt>0)은 WHISPER_RETRY_DELAY_SEC 지난 뒤에만 다시 집음.
-                rows = await conn.fetch(
-                    """
-                    SELECT id, file_path, event_id, user_id
-                    FROM audio_files
-                    WHERE transcript_status = 'PENDING' AND file_path IS NOT NULL
-                      AND (COALESCE(attempt_count, 0) = 0
-                           OR processing_at IS NULL
-                           OR processing_at < NOW() - make_interval(secs => $2))
-                    ORDER BY COALESCE(attempt_count, 0), uploaded_at
-                    LIMIT $1
-                    """,
-                    config.WHISPER_BATCH_SIZE,
-                    float(config.WHISPER_RETRY_DELAY_SEC),
-                )
+                rows = await fetch_pending_audio(conn)
                 for row in rows:
                     try:
                         await whisper_process_one(conn, row)

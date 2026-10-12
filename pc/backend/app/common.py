@@ -24,9 +24,13 @@ def normalize_ip(value: Optional[str]) -> Optional[str]:
     if "%" in v:  # IPv6 zone id(fe80::1%eth0)는 inet 이 못 받음
         v = v.split("%", 1)[0]
     try:
-        return str(ipaddress.ip_address(v))
+        ip = ipaddress.ip_address(v)
     except ValueError:
         return None
+    # IPv4 를 IPv6 로 감싼 형태(::ffff:1.2.3.4)는 IPv4 로 — 같은 사람이 두 주소로 세어지지 않게
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return str(ip)
 
 
 def parse_client_ip(cf_connecting_ip: Optional[str], x_forwarded_for: Optional[str],
