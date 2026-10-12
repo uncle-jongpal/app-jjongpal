@@ -48,7 +48,7 @@ def test_gzip_on_large_response_but_not_static():
     assert r.headers.get("content-length") == "5000"
 
     # 인증 실패 응답처럼 작은 응답은 압축 안 함
-    r = c.get("/rest/todos", headers={"Accept-Encoding": "gzip"})
+    r = c.get("/rest/summaries", headers={"Accept-Encoding": "gzip"})
     assert r.headers.get("content-encoding") is None
 
 
@@ -71,3 +71,13 @@ def test_body_size_limit():
     c = _client()
     r = c.post("/upload/audio", headers={"Content-Length": str(300 * 1024 * 1024)}, content=b"")
     assert r.status_code == 413
+
+
+def test_retired_todos_appointments():
+    # 2026-10-13 폐기: 옛 앱이 불러도 깨지지 않게 조회는 빈 목록, 쓰기는 410
+    c = _client()
+    assert c.get("/rest/todos").json() == []
+    assert c.get("/rest/appointments").json() == []
+    assert c.post("/rest/todos", json=[]).status_code == 410
+    assert c.patch("/rest/todos?id=eq.x", json={}).status_code == 410
+    assert c.delete("/rest/appointments?id=eq.x").status_code == 410

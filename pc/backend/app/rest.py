@@ -7,16 +7,12 @@ REST 라우터 — PostgREST 를 대체. 현행 안드로이드 앱(origin/dev P
   POST   /rest/events                         이벤트 배열 upsert (ON CONFLICT id)
   PATCH  /rest/events?id=eq.<id>              이벤트 metadata_json 부분 수정
   GET    /rest/events?user_id=&type=&select=&limit=   이벤트(통화) 경량 조회
-  GET    /rest/todos?user_id=&order=&limit=   내 할 일 목록
-  POST   /rest/todos                          할 일 배열 upsert (ON CONFLICT id)
-  PATCH  /rest/todos?id=eq.<id>               할 일 부분 수정
+  GET    /rest/todos                          (폐기 2026-10-13) 항상 빈 목록, 쓰기는 410
   GET    /rest/summaries?user_id=&order=&limit=  내 요약 목록
   GET    /rest/summaries?id=eq.<id>&limit=1   요약 1건 조회
   PATCH  /rest/summaries?id=eq.<id>           요약 부분 수정(pinned)
   GET    /rest/transcripts?select=&order=&limit=  통화 받아쓰기 목록
-  GET    /rest/appointments?user_id=&order=&start_at=gte.&limit=  내 약속 목록
-  PATCH  /rest/appointments?id=eq.<id>        약속 부분 수정(confirmed)
-  DELETE /rest/appointments?id=eq.<id>        약속 삭제
+  GET    /rest/appointments                   (폐기 2026-10-13) 항상 빈 목록, 쓰기는 410
   PATCH  /rest/devices?id=eq.<id>             디바이스 수정(fcm_token/last_seen)
   GET    /rest/failed_items?order=&limit=&stage=  처리 실패 목록(뷰)
   POST   /rest/rpc/retry_failed_item          수동 재시도(SECURITY DEFINER 함수)
@@ -48,19 +44,9 @@ COLUMNS = {
         "timestamp", "device_timestamp", "metadata_json", "processing_status",
         "processed_at", "processing_error",
     ],
-    "todos": [
-        "id", "user_id", "content", "source", "source_event_id", "due_at",
-        "related_person", "status", "completion_confidence", "created_at",
-        "updated_at", "completed_at", "source_excerpt", "priority",
-    ],
     "summaries": [
         "id", "transcript_id", "event_id", "user_id", "summary", "raw_json",
         "prompt_version_id", "pushed", "pushed_at", "created_at", "pinned",
-    ],
-    "appointments": [
-        "id", "user_id", "source_event_id", "title", "start_at", "end_at",
-        "location", "with_person", "confidence", "confirmed", "created_at",
-        "source_excerpt",
     ],
     "transcripts": [
         "id", "audio_file_id", "event_id", "user_id", "text", "language",
@@ -76,9 +62,7 @@ COLUMNS = {
 
 # 테이블별 정렬 허용 컬럼 화이트리스트 (order 파라미터 주입 방지)
 ORDER_WHITELIST = {
-    "todos": {"updated_at", "created_at", "due_at", "status"},
     "summaries": {"created_at", "pushed_at"},
-    "appointments": {"start_at", "created_at"},
     "transcripts": {"created_at"},
     "events": {"timestamp", "device_timestamp"},
     "failed_items": {"occurred_at", "failed_at"},
@@ -254,110 +238,20 @@ async def list_events(
     return await _run_select(claims, "events", cols, where_sql, args, col, direction, lim)
 
 
-# ===== todos =====
+# ===== todos (2026-10-13 공식 폐기) =====
+# 할 일 기능은 앱 0.5.9 부터 안 쓰고 테이블도 삭제(백업: db-server ~/work/backups/db).
+# 옛 앱이 불러도 동기화가 깨지지 않게 조회는 빈 목록, 쓰기는 410(Gone).
 @router.get("/rest/todos")
-async def list_todos(
-    user_id: Optional[str] = Query(None),   # "eq.<id>"
-    select: Optional[str] = Query(None),
-    order: Optional[str] = Query(None),
-    limit: Optional[int] = Query(None),
-    authorization: Optional[str] = Header(None),
-):
-    claims = get_claims(authorization)
-    cols = select_columns("todos", select)
-    col, direction = parse_order(order, "todos", "updated_at", "desc")
-    lim = parse_limit(limit, 200)
-    where, args, idx = [], [], 1
-    if user_id:
-        op, val = parse_op(user_id)
-        where.append(f"user_id {op} ${idx}")
-        args.append(int(val))
-        idx += 1
-    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-    return await _run_select(claims, "todos", cols, where_sql, args, col, direction, lim)
+async def list_todos() -> list:
+    return []
 
 
 @router.post("/rest/todos")
-async def upsert_todos(
-    todos: list[dict] = Body(...),
-    authorization: Optional[str] = Header(None),
-):
-    claims = get_claims(authorization)
-    async with db.rls_connection(claims) as conn:
-        for t in todos:
-            await conn.execute(
-                """
-                INSERT INTO todos
-                    (id, user_id, content, source, source_event_id, due_at,
-                     related_person, status, completion_confidence,
-                     created_at, updated_at, completed_at, source_excerpt, priority)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6::text::timestamptz,
-                     $7, $8, $9,
-                     $10::text::timestamptz, $11::text::timestamptz, $12::text::timestamptz,
-                     $13, $14)
-                ON CONFLICT (id) DO UPDATE SET
-                    content               = EXCLUDED.content,
-                    source                = EXCLUDED.source,
-                    source_event_id       = EXCLUDED.source_event_id,
-                    due_at                = EXCLUDED.due_at,
-                    related_person        = EXCLUDED.related_person,
-                    status                = EXCLUDED.status,
-                    completion_confidence = EXCLUDED.completion_confidence,
-                    updated_at            = EXCLUDED.updated_at,
-                    completed_at          = EXCLUDED.completed_at,
-                    source_excerpt        = EXCLUDED.source_excerpt,
-                    priority              = EXCLUDED.priority
-                """,
-                t.get("id"),
-                t.get("user_id"),
-                t.get("content"),
-                t.get("source"),
-                t.get("source_event_id"),
-                t.get("due_at"),
-                t.get("related_person"),
-                t.get("status"),
-                t.get("completion_confidence", 0.0),
-                t.get("created_at"),
-                t.get("updated_at"),
-                t.get("completed_at"),
-                t.get("source_excerpt"),
-                t.get("priority", 0.0),
-            )
-    return Response(status_code=201)
-
-
 @router.patch("/rest/todos")
-async def patch_todo(
-    id: str = Query(...),  # "eq.<id>"
-    patch: dict = Body(...),
-    authorization: Optional[str] = Header(None),
-):
-    claims = get_claims(authorization)
-    todo_id = strip_op(id, "eq")
-    allowed = {
-        "status": "",
-        "content": "",
-        "due_at": "::text::timestamptz",
-        "completed_at": "::text::timestamptz",
-        "updated_at": "::text::timestamptz",
-    }
-    sets, args, idx = [], [], 1
-    for field, cast in allowed.items():
-        if field in patch:
-            sets.append(f"{field} = ${idx}{cast}")
-            args.append(patch[field])
-            idx += 1
-    if not sets:
-        return Response(status_code=204)
-    args.append(todo_id)
-    sql = f"UPDATE todos SET {', '.join(sets)} WHERE id = ${idx}"
-    async with db.rls_connection(claims) as conn:
-        await conn.execute(sql, *args)
-    return Response(status_code=204)
+async def write_todos_retired() -> Response:
+    return Response(status_code=410)
 
 
-# ===== summaries =====
 @router.get("/rest/summaries")
 async def list_summaries(
     id: Optional[str] = Query(None),         # "eq.<id>" (단건 조회)
@@ -421,65 +315,16 @@ async def list_transcripts(
     return await _run_select(claims, "transcripts", cols, "", [], col, direction, lim)
 
 
-# ===== appointments =====
+# ===== appointments (2026-10-13 공식 폐기, todos 와 같은 처리) =====
 @router.get("/rest/appointments")
-async def list_appointments(
-    user_id: Optional[str] = Query(None),    # "eq.<id>"
-    select: Optional[str] = Query(None),
-    order: Optional[str] = Query(None),
-    start_at: Optional[str] = Query(None),   # "gte.<iso>" (선택)
-    limit: Optional[int] = Query(None),
-    authorization: Optional[str] = Header(None),
-):
-    claims = get_claims(authorization)
-    cols = select_columns("appointments", select)
-    col, direction = parse_order(order, "appointments", "start_at", "asc")
-    lim = parse_limit(limit, 100)
-    where, args, idx = [], [], 1
-    if user_id:
-        op, val = parse_op(user_id)
-        where.append(f"user_id {op} ${idx}")
-        args.append(int(val))
-        idx += 1
-    if start_at:
-        op, val = parse_op(start_at)
-        where.append(f"start_at {op} ${idx}::text::timestamptz")
-        args.append(val)
-        idx += 1
-    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-    return await _run_select(claims, "appointments", cols, where_sql, args, col, direction, lim)
+async def list_appointments() -> list:
+    return []
 
 
 @router.patch("/rest/appointments")
-async def patch_appointment(
-    id: str = Query(...),  # "eq.<id>"
-    patch: dict = Body(...),
-    authorization: Optional[str] = Header(None),
-):
-    claims = get_claims(authorization)
-    appt_id = strip_op(id, "eq")
-    # AppointmentPatch 는 confirmed 만.
-    if "confirmed" not in patch:
-        return Response(status_code=204)
-    async with db.rls_connection(claims) as conn:
-        await conn.execute(
-            "UPDATE appointments SET confirmed = $1 WHERE id = $2::uuid",
-            patch.get("confirmed"),
-            appt_id,
-        )
-    return Response(status_code=204)
-
-
 @router.delete("/rest/appointments")
-async def delete_appointment(
-    id: str = Query(...),  # "eq.<id>"
-    authorization: Optional[str] = Header(None),
-):
-    claims = get_claims(authorization)
-    appt_id = strip_op(id, "eq")
-    async with db.rls_connection(claims) as conn:
-        await conn.execute("DELETE FROM appointments WHERE id = $1::uuid", appt_id)
-    return Response(status_code=204)
+async def write_appointments_retired() -> Response:
+    return Response(status_code=410)
 
 
 # ===== devices =====

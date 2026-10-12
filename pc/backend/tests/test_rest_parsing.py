@@ -4,9 +4,9 @@ from app.rest import COLUMNS, parse_limit, parse_op, parse_order, select_columns
 
 
 def test_select_columns_default_is_full():
-    assert select_columns("todos", None) == COLUMNS["todos"]
-    assert select_columns("todos", "") == COLUMNS["todos"]
-    assert select_columns("todos", "*") == COLUMNS["todos"]
+    assert select_columns("summaries", None) == COLUMNS["summaries"]
+    assert select_columns("summaries", "") == COLUMNS["summaries"]
+    assert select_columns("summaries", "*") == COLUMNS["summaries"]
 
 
 def test_select_columns_keeps_request_order_and_dedupes():
