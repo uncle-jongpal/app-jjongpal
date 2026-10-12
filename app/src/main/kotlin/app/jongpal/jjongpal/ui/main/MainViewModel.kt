@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -139,22 +140,25 @@ class MainViewModel @Inject constructor(
     val phoneByEvent: StateFlow<Map<String, String>> = _phoneByEvent.asStateFlow()
     fun phoneFor(eventId: String?): String? = eventId?.let { _phoneByEvent.value[it] }
 
-    // 검색어로 거른 통화 정리 목록. 비면 전체. 번호(숫자만 비교) 또는 이름·내용 일치.
+    // 검색어로 거른 통화 정리 목록. 비면 전체(최근 목록). 번호(숫자만 비교) 또는 이름·내용·원문 일치.
+    // 검색은 로컬 DB 전체에서 — 예전엔 화면 목록(최근 100건) 안에서만 찾아 옛 통화가 안 나왔다.
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
     val filteredSummaries: StateFlow<List<SummaryEntity>> =
-        combine(summaries, _query, _phoneByEvent) { list, q, phones ->
-            val kw = q.trim()
-            if (kw.isEmpty()) return@combine list
-            val digits = kw.filter { it.isDigit() }
-            list.filter { s ->
-                val phone = s.eventId?.let { phones[it] }
-                val phoneHit = digits.length >= 2 && phone != null &&
-                    phone.filter { c -> c.isDigit() }.contains(digits)
-                val textHit = (s.summary?.contains(kw, ignoreCase = true) == true) ||
-                    s.rawJson.contains(kw, ignoreCase = true) ||
-                    (s.transcriptText?.contains(kw, ignoreCase = true) == true)   // 원문(받아쓰기)도 검색
-                phoneHit || textHit
+        combine(_showAllUsers, _query.debounce(200), _phoneByEvent) { showAll, q, phones -> Triple(showAll, q, phones) }
+            .flatMapLatest { (showAll, q, phones) ->
+                val kw = q.trim()
+                val all = showAll && isAdmin
+                if (kw.isEmpty()) {
+                    if (all) summaryRepository.recent() else summaryRepository.recentByUser(tokenManager.userId)
+                } else {
+                    summaryRepository.search(
+                        kw = kw,
+                        userId = if (all) null else tokenManager.userId,
+                        phoneEventIds = phoneSearchEventIds(kw, phones),
+                    )
+                }
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
         refreshFailed()
@@ -286,4 +290,18 @@ class MainViewModel @Inject constructor(
             summaryRepository.setPinned(id, pinned)
         }
     }
+}
+
+/**
+ * 번호 검색어(숫자 2자리 이상)가 들어간 전화번호를 가진 통화 event id 목록 (순수 함수 — 단위 테스트 대상).
+ * SQL IN 목록 변수 한도 때문에 [max]건까지만.
+ */
+internal fun phoneSearchEventIds(keyword: String, phones: Map<String, String>, max: Int = 900): List<String> {
+    val digits = keyword.filter { it.isDigit() }
+    if (digits.length < 2) return emptyList()
+    return phones.asSequence()
+        .filter { (_, phone) -> phone.filter { it.isDigit() }.contains(digits) }
+        .map { it.key }
+        .take(max)
+        .toList()
 }

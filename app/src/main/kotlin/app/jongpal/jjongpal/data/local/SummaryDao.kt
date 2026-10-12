@@ -21,6 +21,23 @@ interface SummaryDao {
     @Query("SELECT * FROM summaries WHERE userId = :userId ORDER BY createdAt DESC LIMIT :limit")
     fun recentByUser(userId: Int, limit: Int = 100): Flow<List<SummaryEntity>>
 
+    /**
+     * 통화 검색 — 최근 100건이 아니라 로컬 표 전체에서 찾는다(예전엔 목록과 같은 100건 안에서만 찾았다).
+     * userId 가 null 이면 모든 사용자(어드민 모두 보기). 번호 검색은 번호가 맞는 통화 event id 목록으로.
+     */
+    @Query("""
+        SELECT * FROM summaries
+        WHERE (:userId IS NULL OR userId = :userId)
+          AND (
+            summary LIKE '%' || :kw || '%'
+            OR rawJson LIKE '%' || :kw || '%'
+            OR transcriptText LIKE '%' || :kw || '%'
+            OR eventId IN (:phoneEventIds)
+          )
+        ORDER BY createdAt DESC
+    """)
+    fun search(kw: String, userId: Int?, phoneEventIds: List<String>): Flow<List<SummaryEntity>>
+
     @Query("SELECT * FROM summaries WHERE id = :id")
     suspend fun get(id: String): SummaryEntity?
 

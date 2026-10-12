@@ -35,6 +35,10 @@ class SummaryRepository @Inject constructor(
 
     fun recentByUser(userId: Int): Flow<List<SummaryEntity>> = dao.recentByUser(userId)
 
+    /** 로컬 전체 검색 — [userId] null 이면 모든 사용자 */
+    fun search(kw: String, userId: Int?, phoneEventIds: List<String>): Flow<List<SummaryEntity>> =
+        dao.search(kw, userId, phoneEventIds)
+
     /**
      * 서버 요약을 받아 로컬에 합친다.
      * - 정기 동기화는 최근 [PERIODIC_LIMIT]건만(15분마다 2000건씩 받던 낭비 제거)
