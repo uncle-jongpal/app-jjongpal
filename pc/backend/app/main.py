@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from . import auth, config, db, rest, upload, workers
 
@@ -96,6 +97,25 @@ class MaxBodySizeMiddleware:
         await self.app(scope, receive, send)
 
 
+class SelectiveGZipMiddleware:
+    """응답 gzip 압축(목록 조회 JSON 등). 단 /static(APK 등 이미 압축된 큰 파일)은 제외 —
+    압축해도 안 줄고 CPU 만 쓰며, Content-Length 가 빠져 앱의 다운로드 진행률이 깨진다."""
+
+    SKIP_PREFIXES = ("/static",)
+
+    def __init__(self, app, minimum_size: int = 1000):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=minimum_size)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not scope.get("path", "").startswith(self.SKIP_PREFIXES):
+            await self.gzip(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000)
+# 나중에 add 한 것이 바깥 → 본문 크기 제한이 압축보다 먼저 검사
 app.add_middleware(MaxBodySizeMiddleware, max_bytes=config.MAX_BYTES)
 
 # 라우터 등록
