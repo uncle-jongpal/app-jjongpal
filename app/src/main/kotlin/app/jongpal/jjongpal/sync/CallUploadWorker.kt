@@ -82,6 +82,16 @@ class CallUploadWorker @AssistedInject constructor(
             .filter { it.type == "call" }
         if (pending.isEmpty()) return Result.success()
 
+        // 토큰 미리 갱신 — 서버는 업로드 본문을 다 받은 뒤에야 인증을 확인한다. 토큰(약 1시간)이 만료돼 있으면
+        // 수십 MB 를 다 보낸 뒤 401 → 갱신 → 같은 파일을 처음부터 다시 보냈다. 가벼운 인증 요청을 먼저 한 번
+        // 보내 인증 처리기(AuthInterceptor)가 401 을 받고 미리 갱신하게 한다. 실패해도 업로드는 그대로 진행.
+        try {
+            val uid = tokenManager.userId
+            pcApi.listSummaries(userIdEq = if (uid > 0) "eq.$uid" else null, limit = 1).body()
+        } catch (e: Exception) {
+            Timber.d(e, "token pre-refresh ping failed (ignored)")
+        }
+
         var ok = 0
         var failed = 0          // 연속 실패가 쌓여 알림까지 띄운 것
         var quietFailed = 0     // 이번엔 실패했지만 아직 알릴 단계가 아닌 것(다음 차례 재시도)
