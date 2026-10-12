@@ -17,7 +17,12 @@ class Database:
     async def connect(self) -> None:
         if self._pool is None:
             # 단일 인스턴스이므로 작은 풀로 충분.
-            self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=3)
+            # command_timeout: 소리 없이 끊긴 연결에서 체크가 무한 대기해 감시 전체가 멈추는 것 방지.
+            # max_inactive_connection_lifetime: 오래 놀던 연결은 버리고 새로 맺음.
+            self._pool = await asyncpg.create_pool(
+                self._dsn, min_size=1, max_size=3,
+                command_timeout=30, max_inactive_connection_lifetime=300,
+            )
 
     async def close(self) -> None:
         if self._pool is not None:
