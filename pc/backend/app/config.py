@@ -48,7 +48,7 @@ WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "ko")
 WHISPER_POLL_INTERVAL_SEC = int(os.environ.get("WHISPER_POLL_INTERVAL_SEC", "5"))
 WHISPER_BATCH_SIZE = int(os.environ.get("WHISPER_BATCH_SIZE", "3"))
 WHISPER_BACKEND_URL = os.environ.get("WHISPER_BACKEND_URL", "").strip().rstrip("/")
-WHISPER_TIMEOUT_SEC = int(os.environ.get("WHISPER_TIMEOUT_SEC", "600"))
+WHISPER_TIMEOUT_SEC = int(os.environ.get("WHISPER_TIMEOUT_SEC", "1200"))  # 2026-10-13 600→1200: GPU 다른 작업과 겹칠 때 여유
 WHISPER_BACKEND_BACKOFF_SEC = int(os.environ.get("WHISPER_BACKEND_BACKOFF_SEC", "15"))
 # 파일 단위 일시 오류(응답 시간초과·500 등)를 몇 번까지 재시도할지. 넘으면 FAILED 확정.
 # (받아쓰기 서버 자체가 꺼진 경우=연결 거부 등은 횟수에 안 셈 → 백오프만)

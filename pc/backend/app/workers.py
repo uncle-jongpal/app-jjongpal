@@ -69,6 +69,34 @@ def classify_http_status(status_code: int) -> str:
     return "permanent"  # 4xx
 
 
+class FileErrorJudge:
+    """파일 단위 오류를 '파일 탓'으로 셀지, '서버 전체 문제'로 볼지 판정.
+
+    작업PC 받아쓰기 서버는 헬스 체크는 정상인데 모든 파일에 500 을 내는 상태가 있다
+    (2026-10-07 NVIDIA 드라이버 갱신 후 실제 사례, GPU 메모리 부족도 같은 모양).
+    그때 파일마다 시도 횟수를 세면 대기열 전체가 몇 분 만에 FAILED 로 굳는다.
+
+    규칙: 직전에 처리한 파일이 성공했을 때(=서버가 멀쩡함이 입증됨)의 오류만 파일 탓으로 센다.
+    오류가 연달아 나면 두 번째부터는 서버 문제로 보고 횟수를 안 세며 백오프한다.
+    → 서버 전체 장애 중엔 첫 파일만 1회 세고 끝. 독 파일 하나는 다른 파일이 성공할 때마다 1회씩 쌓여 결국 FAILED.
+    """
+
+    def __init__(self) -> None:
+        self._last_ok = True  # 기동 직후 첫 오류는 파일 탓으로 셈
+
+    def on_success(self) -> None:
+        self._last_ok = True
+
+    def blame_file(self) -> bool:
+        """이번 오류를 파일 탓으로 셀지. 호출하면 '직전 결과=실패'로 기록된다."""
+        blame = self._last_ok
+        self._last_ok = False
+        return blame
+
+
+_file_error_judge = FileErrorJudge()
+
+
 def _iter_causes(exc: BaseException):
     """예외와 그 원인 사슬(args 안 예외, urllib3 .reason, __cause__, __context__)을 훑는다."""
     seen = set()
@@ -149,6 +177,43 @@ async def transcribe_one(file_path: str):
     return await loop.run_in_executor(None, _transcribe_via_api, file_path)
 
 
+async def _count_file_transient(conn: asyncpg.Connection, audio_id, started: float, e: Exception) -> None:
+    """파일 단위 일시 오류 → 시도 횟수 +1. 상한 도달 시 FAILED 확정(processed_at 기록),
+    아니면 PENDING 으로 두고 processing_at=NOW() 로 재시도 대기 시작점을 찍는다."""
+    duration_ms = int((time.monotonic() - started) * 1000)
+    err = str(e)[:1000]
+    upd = await conn.fetchrow(
+        """
+        UPDATE audio_files
+        SET attempt_count = COALESCE(attempt_count, 0) + 1,
+            transcript_status = CASE WHEN COALESCE(attempt_count, 0) + 1 >= $2
+                                     THEN 'FAILED' ELSE 'PENDING' END,
+            processed_at = CASE WHEN COALESCE(attempt_count, 0) + 1 >= $2
+                                THEN NOW() ELSE processed_at END,
+            processing_at = NOW(),
+            error_message = $3
+        WHERE id = $1
+        RETURNING attempt_count, transcript_status
+        """,
+        audio_id, config.WHISPER_MAX_TRANSIENT_ATTEMPTS, err,
+    )
+    attempts = upd["attempt_count"] if upd else None
+    status = upd["transcript_status"] if upd else "?"
+    await conn.execute(
+        """
+        INSERT INTO audio_processing_log (audio_file_id, stage, status, message, duration_ms)
+        VALUES ($1, 'whisper', 'FAILED', $2, $3)
+        """,
+        audio_id,
+        f"[일시 오류 {attempts}/{config.WHISPER_MAX_TRANSIENT_ATTEMPTS} → {status}] {err}"[:1000],
+        duration_ms,
+    )
+    log.warning(
+        f"[{audio_id}] 파일 단위 일시 오류 ({attempts}/{config.WHISPER_MAX_TRANSIENT_ATTEMPTS}) → {status}: {err}"
+    )
+
+
+
 async def whisper_process_one(conn: asyncpg.Connection, row: asyncpg.Record) -> None:
     audio_id = row["id"]
     file_path = row["file_path"]
@@ -212,7 +277,19 @@ async def whisper_process_one(conn: asyncpg.Connection, row: asyncpg.Record) -> 
         except OSError as e:
             log.warning(f"[{audio_id}] file remove warn: {e}")
 
+        _file_error_judge.on_success()
         log.info(f"[{audio_id}] done in {duration_ms} ms, {len(text)} chars")
+
+    except WhisperFileTransient as e:
+        if not _file_error_judge.blame_file():
+            # 연달아 실패 → 파일보다 서버 쪽 문제일 가능성이 큼. 횟수 안 세고 서버 다운처럼 백오프.
+            await conn.execute(
+                "UPDATE audio_files SET transcript_status = 'PENDING' WHERE id = $1",
+                audio_id,
+            )
+            log.warning(f"[{audio_id}] 연속 파일 오류 — 서버 쪽 문제로 보고 횟수 없이 백오프: {e}")
+            raise WhisperBackendDown(f"consecutive file errors: {e}") from e
+        await _count_file_transient(conn, audio_id, started, e)
 
     except WhisperBackendDown as e:
         # 서버 자체가 다운 → 파일 탓 아님. 횟수 안 세고 PENDING 복귀, 상위로 전파해 백오프.
@@ -222,41 +299,6 @@ async def whisper_process_one(conn: asyncpg.Connection, row: asyncpg.Record) -> 
         )
         log.warning(f"[{audio_id}] 받아쓰기 서버 다운 — 대기열 유지 후 백오프: {e}")
         raise
-
-    except WhisperFileTransient as e:
-        # 파일 단위 일시 오류 → 시도 횟수 +1. 상한 도달 시 FAILED 확정(processed_at 기록),
-        # 아니면 PENDING 으로 두고 processing_at=NOW() 로 재시도 대기 시작점을 찍는다.
-        duration_ms = int((time.monotonic() - started) * 1000)
-        err = str(e)[:1000]
-        upd = await conn.fetchrow(
-            """
-            UPDATE audio_files
-            SET attempt_count = COALESCE(attempt_count, 0) + 1,
-                transcript_status = CASE WHEN COALESCE(attempt_count, 0) + 1 >= $2
-                                         THEN 'FAILED' ELSE 'PENDING' END,
-                processed_at = CASE WHEN COALESCE(attempt_count, 0) + 1 >= $2
-                                    THEN NOW() ELSE processed_at END,
-                processing_at = NOW(),
-                error_message = $3
-            WHERE id = $1
-            RETURNING attempt_count, transcript_status
-            """,
-            audio_id, config.WHISPER_MAX_TRANSIENT_ATTEMPTS, err,
-        )
-        attempts = upd["attempt_count"] if upd else None
-        status = upd["transcript_status"] if upd else "?"
-        await conn.execute(
-            """
-            INSERT INTO audio_processing_log (audio_file_id, stage, status, message, duration_ms)
-            VALUES ($1, 'whisper', 'FAILED', $2, $3)
-            """,
-            audio_id,
-            f"[일시 오류 {attempts}/{config.WHISPER_MAX_TRANSIENT_ATTEMPTS} → {status}] {err}"[:1000],
-            duration_ms,
-        )
-        log.warning(
-            f"[{audio_id}] 파일 단위 일시 오류 ({attempts}/{config.WHISPER_MAX_TRANSIENT_ATTEMPTS}) → {status}: {err}"
-        )
 
     except Exception as e:
         duration_ms = int((time.monotonic() - started) * 1000)
