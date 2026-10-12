@@ -1,6 +1,5 @@
 package app.jongpal.jjongpal.capture.call
 
-import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,12 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.provider.CallLog
-import androidx.core.content.ContextCompat
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
@@ -75,7 +71,7 @@ class FileObserverService : Service() {
                     filePath = filePath,
                     durationSec = null,
                     timestampMs = ts,
-                    phoneNumber = readLatestCallNumber(ts),
+                    // 번호는 captureCallFile 안에서 공통으로 찾는다(모든 감지 경로 동일)
                 )
                 syncScheduler.scheduleNow()
             }
@@ -187,41 +183,6 @@ class FileObserverService : Service() {
                 Timber.e(e, "post-call scan failed")
             }
             syncScheduler.scheduleNow()
-        }
-    }
-
-    // 통화기록(CallLog)에서 녹음 시각에 가장 가까운 통화의 상대 번호를 읽음.
-    // READ_CALL_LOG 미허용이면 조용히 null (기존 동작 유지). 10분 넘게 떨어진 건 신뢰 안 함.
-    private fun readLatestCallNumber(aroundMs: Long): String? {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG)
-            != PackageManager.PERMISSION_GRANTED
-        ) return null
-        return try {
-            val projection = arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE)
-            contentResolver.query(
-                CallLog.Calls.CONTENT_URI, projection, null, null,
-                CallLog.Calls.DATE + " DESC",
-            )?.use { c ->
-                val numIdx = c.getColumnIndex(CallLog.Calls.NUMBER)
-                val dateIdx = c.getColumnIndex(CallLog.Calls.DATE)
-                var best: String? = null
-                var bestDiff = Long.MAX_VALUE
-                var scanned = 0
-                while (c.moveToNext() && scanned < 20) {
-                    scanned++
-                    val num = if (numIdx >= 0) c.getString(numIdx) else null
-                    val date = if (dateIdx >= 0) c.getLong(dateIdx) else 0L
-                    val diff = kotlin.math.abs(date - aroundMs)
-                    if (!num.isNullOrBlank() && diff < bestDiff) {
-                        bestDiff = diff
-                        best = num
-                    }
-                }
-                if (bestDiff <= 10 * 60_000L) best?.filter { it.isDigit() || it == '+' } else null
-            }
-        } catch (e: Exception) {
-            Timber.w(e, "readLatestCallNumber failed")
-            null
         }
     }
 

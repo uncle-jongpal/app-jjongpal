@@ -1,5 +1,6 @@
 package app.jongpal.jjongpal.data.repository
 
+import app.jongpal.jjongpal.capture.call.CallNumberResolver
 import app.jongpal.jjongpal.data.local.EventDao
 import app.jongpal.jjongpal.data.local.EventEntity
 import app.jongpal.jjongpal.data.remote.EventDto
@@ -18,6 +19,7 @@ class EventRepository @Inject constructor(
     private val dao: EventDao,
     private val pcApi: PcApi,
     private val moshi: Moshi,
+    private val numberResolver: CallNumberResolver,
 ) {
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
@@ -57,10 +59,14 @@ class EventRepository @Inject constructor(
         timestampMs: Long,
         phoneNumber: String? = null,
     ) {
+        // 이미 등록된 파일이면 끝 — 재스캔마다 통화기록을 뒤지지 않게(삽입은 어차피 IGNORE).
+        if (dao.get(eventId) != null) return
+        // 번호 찾기를 공통 등록 경로로 — 어느 감지 경로(감시 서비스·주기 스캔·백필)가 먼저 등록해도 번호가 채워지게.
+        val phone = phoneNumber ?: numberResolver.resolve(filePath, timestampMs)
         val meta = mapOf<String, Any?>(
             "file_path" to filePath,
             "duration_sec" to durationSec,
-            "phone" to phoneNumber,
+            "phone" to phone,
         )
         dao.insert(
             EventEntity(

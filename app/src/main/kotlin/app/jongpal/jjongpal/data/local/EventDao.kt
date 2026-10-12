@@ -52,6 +52,10 @@ interface EventDao {
     @Query("SELECT * FROM events WHERE id = :id")
     suspend fun get(id: String): EventEntity?
 
+    /** 통화 메타(번호 등) 갱신 — 업로드 직전 비어 있던 번호를 채울 때 */
+    @Query("UPDATE events SET metadataJson = :metadataJson WHERE id = :id")
+    suspend fun updateMetadata(id: String, metadataJson: String)
+
     @Query("UPDATE events SET syncStatus = :status, syncedAt = :syncedAt, lastError = :error, retryCount = retryCount + :retryDelta WHERE id = :id")
     suspend fun updateSync(id: String, status: String, syncedAt: Long?, error: String?, retryDelta: Int)
 

@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import app.jongpal.jjongpal.auth.TokenManager
+import app.jongpal.jjongpal.capture.call.CallNumberResolver
 import app.jongpal.jjongpal.data.local.EventDao
 import app.jongpal.jjongpal.data.remote.EventMetaPatch
 import app.jongpal.jjongpal.data.remote.PcApi
@@ -40,6 +41,7 @@ class CallUploadWorker @AssistedInject constructor(
     private val pcApi: PcApi,
     private val tokenManager: TokenManager,
     private val moshi: Moshi,
+    private val numberResolver: CallNumberResolver,
 ) : CoroutineWorker(ctx, params) {
 
     private val mapAdapter = moshi.adapter<Map<String, Any?>>(MAP_TYPE)
@@ -90,7 +92,7 @@ class CallUploadWorker @AssistedInject constructor(
         var uploadIndex = 0
 
         for (event in pending) {
-            val meta = event.metadataJson?.let { mapAdapter.fromJson(it) } ?: emptyMap()
+            var meta = event.metadataJson?.let { mapAdapter.fromJson(it) } ?: emptyMap()
             val filePath = meta["file_path"] as? String
             val duration = (meta["duration_sec"] as? Number)?.toInt()
 
@@ -120,6 +122,16 @@ class CallUploadWorker @AssistedInject constructor(
                 Timber.i("call not finalized yet (no moov), deferring %s", file.name)
                 deferred++
                 continue
+            }
+
+            // 번호 없이 등록된 통화(예전 경로·통화기록 권한 늦게 허용)면 업로드 직전에 한 번 더 찾아 채운다.
+            // 업로드 성공 후 서버로 번호를 PATCH 하는 아래 흐름이 이 값을 쓴다.
+            if ((meta["phone"] as? String).isNullOrBlank()) {
+                val found = try { numberResolver.resolve(filePath, event.timestamp) } catch (_: Exception) { null }
+                if (!found.isNullOrBlank()) {
+                    meta = meta + ("phone" to found)
+                    eventDao.updateMetadata(event.id, mapAdapter.toJson(meta))
+                }
             }
 
             // 안정된 사본을 떠서 업로드 — 업로드 도중 원본이 바뀌어도 선언 크기와 전송 크기가 어긋나지 않음.
