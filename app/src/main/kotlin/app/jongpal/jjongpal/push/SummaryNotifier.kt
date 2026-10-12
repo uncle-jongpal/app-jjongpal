@@ -12,6 +12,7 @@ import app.jongpal.jjongpal.MainActivity
 import app.jongpal.jjongpal.auth.TokenManager
 import app.jongpal.jjongpal.data.remote.PcApi
 import app.jongpal.jjongpal.data.remote.SummaryDto
+import app.jongpal.jjongpal.data.repository.SummaryRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import timber.log.Timber
 import javax.inject.Inject
@@ -25,12 +26,14 @@ import javax.inject.Singleton
  * - "마지막으로 본 요약" 시각(TokenManager.lastSeenSummaryAt)보다 새로 만들어진 요약만 알림.
  * - 첫 실행/로그인 직후(마커=0)엔 알림 없이 현재 최신값으로 마커만 초기화 → 과거 요약 밀림(스팸) 방지.
  * - 알림 탭 → MainActivity 로 이동하며 해당 요약으로 딥링크(기존 FCM 알림과 동일 동작).
+ * - 받은 요약은 로컬 DB 에도 저장 → 알림을 누르면 바로 상세가 열린다.
  */
 @Singleton
 class SummaryNotifier @Inject constructor(
     @ApplicationContext private val context: Context,
     private val pcApi: PcApi,
     private val tokenManager: TokenManager,
+    private val summaryRepository: SummaryRepository,
 ) {
 
     /** 새 요약이 있는지 확인하고, 있으면 각각 로컬 알림을 띄운다. 네트워크/권한 실패는 조용히 넘긴다. */
@@ -46,6 +49,14 @@ class SummaryNotifier @Inject constructor(
         if (!resp.isSuccessful) {
             Timber.w("summary poll failed ${resp.code()}")
             return
+        }
+
+        // 받은 요약을 로컬 DB 에도 넣는다 — 상세 화면은 로컬 DB 에서 찾으므로, 안 넣으면
+        // 알림을 눌러도 다음 동기화(최대 15분)까지 상세가 안 열렸다.
+        try {
+            summaryRepository.saveFromServer(resp.body().orEmpty())
+        } catch (e: Exception) {
+            Timber.w(e, "summary poll local save failed")
         }
 
         val items = resp.body().orEmpty()

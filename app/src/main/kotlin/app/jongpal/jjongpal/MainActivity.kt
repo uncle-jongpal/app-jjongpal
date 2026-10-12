@@ -63,6 +63,8 @@ class MainActivity : ComponentActivity() {
         if (!intent.hasExtra("nav")) return
         navSummaryId.value = intent.getStringExtra("summary_id")
         navTick.intValue += 1
+        // 알림으로 들어왔으면 바로 동기화 — 그 요약이 아직 로컬에 없어도 곧 들어와 상세가 열리게.
+        if (tokenManager.hasValidSession()) syncScheduler.scheduleNow()
     }
 }
 
