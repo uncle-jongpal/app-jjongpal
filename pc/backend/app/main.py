@@ -61,7 +61,15 @@ async def lifespan(app: FastAPI):
         await db.close_pool()
 
 
-app = FastAPI(title="jjongpal-backend", lifespan=lifespan)
+_docs = config.ENABLE_API_DOCS
+app = FastAPI(
+    title="jjongpal-backend",
+    lifespan=lifespan,
+    # 2026-10-13: 공개 API 문서 기본 차단(ENABLE_API_DOCS=true 일 때만 노출)
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 
 
 class MaxBodySizeMiddleware:

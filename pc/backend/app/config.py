@@ -35,6 +35,10 @@ MP4_EXT = {".m4a", ".mp4"}
 MAX_BYTES = 200 * 1024 * 1024  # 200MB (nginx client_max_body_size 200M 과 일치)
 MIN_BYTES = 4 * 1024  # 4KB 미만 = 빈/깨진 토막
 
+# ===== API 문서(/docs, /redoc, /openapi.json) =====
+# 기본 꺼짐(공개 인터넷에 경로 목록·스키마 노출 방지). 개발 때만 ENABLE_API_DOCS=true.
+ENABLE_API_DOCS = os.environ.get("ENABLE_API_DOCS", "false").strip().lower() in ("1", "true", "yes", "on")
+
 # ===== 백그라운드 워커 게이트 =====
 # 기본 true. 스테이징에서 운영 대기열을 이중 소비하지 않도록 false 로 끌 수 있음.
 RUN_WORKERS = os.environ.get("RUN_WORKERS", "true").strip().lower() in ("1", "true", "yes", "on")
