@@ -80,6 +80,7 @@ import app.jongpal.jjongpal.ui.permission.hasAllFilesAccess
 import app.jongpal.jjongpal.ui.permission.hasCallLogPermission
 import app.jongpal.jjongpal.ui.permission.hasMediaAudioPermission
 import app.jongpal.jjongpal.ui.permission.hasPhoneStatePermission
+import app.jongpal.jjongpal.ui.permission.hasPostNotificationsPermission
 import app.jongpal.jjongpal.ui.permission.isBatteryUnrestricted
 import app.jongpal.jjongpal.ui.permission.isNotificationAccessGranted
 import app.jongpal.jjongpal.ui.theme.JpText
@@ -104,6 +105,20 @@ fun MainScreen(
     var lastNavTab by remember { mutableIntStateOf(0) }
     LaunchedEffect(navTick) { if (navTick != lastNavTab) { lastNavTab = navTick; tab = 2 } }
     var showProfile by remember { mutableStateOf(false) }
+
+    // 알림 권한(안드로이드 13+) — 요청 화면(PermissionScreen)이 실제로는 안 쓰여 한 번도 안 물었다.
+    // 앱 첫 진입 때 한 번만 묻고(거절해도 반복해서 조르지 않음), 이후엔 설정 > 권한에서 켤 수 있다.
+    val ctxForPerm = LocalContext.current
+    val postNotifFirstLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPostNotificationsPermission(ctxForPerm)) {
+            val prefs = ctxForPerm.getSharedPreferences("jjongpal_ui", android.content.Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("post_notif_asked", false)) {
+                prefs.edit().putBoolean("post_notif_asked", true).apply()
+                postNotifFirstLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     val todos by vm.todos.collectAsState()
     val suggestions by vm.suggestions.collectAsState()
@@ -1716,6 +1731,7 @@ private fun SettingsScreen(
     var files by remember { mutableStateOf(hasAllFilesAccess(ctx)) }
     var phone by remember { mutableStateOf(hasPhoneStatePermission(ctx)) }
     var callLog by remember { mutableStateOf(hasCallLogPermission(ctx)) }
+    var postNotif by remember { mutableStateOf(hasPostNotificationsPermission(ctx)) }
     val refreshPerms = {
         notif = isNotificationAccessGranted(ctx)
         audio = hasMediaAudioPermission(ctx)
@@ -1723,6 +1739,7 @@ private fun SettingsScreen(
         files = hasAllFilesAccess(ctx)
         phone = hasPhoneStatePermission(ctx)
         callLog = hasCallLogPermission(ctx)
+        postNotif = hasPostNotificationsPermission(ctx)
     }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { refreshPerms() }
     val battLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { refreshPerms() }
@@ -1730,7 +1747,21 @@ private fun SettingsScreen(
     val audioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refreshPerms() }
     val phoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refreshPerms() }
     val callLogLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refreshPerms() }
-    val grantedCount = listOf(audio, batt, files, phone, callLog).count { it }
+    val postNotifSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { refreshPerms() }
+    val postNotifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        refreshPerms()
+        // 두 번 거절하면 시스템이 더는 묻지 않는다 → 앱 알림 설정 화면으로 보내 직접 켜게
+        if (!granted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                postNotifSettingsLauncher.launch(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+                )
+            } catch (_: Exception) {}
+        }
+    }
+    val permStates = listOf(audio, batt, files, phone, callLog, postNotif)
+    val grantedCount = permStates.count { it }
+    val permTotal = permStates.size
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -1758,7 +1789,7 @@ private fun SettingsScreen(
         item {
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 SectionHeader("권한", Modifier.weight(1f))
-                Text("$grantedCount / 5 허용됨", style = JpText.meta, color = if (grantedCount == 5) c.sage else c.ink2)
+                Text("$grantedCount / $permTotal 허용됨", style = JpText.meta, color = if (grantedCount == permTotal) c.sage else c.ink2)
             }
         }
         item {
@@ -1778,6 +1809,19 @@ private fun SettingsScreen(
                     SettingRow(Icons.Filled.Call, "통화 상대 번호 읽기", "통화기록에서 번호 확보 → 번호 검색", {
                         callLogLauncher.launch(Manifest.permission.READ_CALL_LOG)
                     }) { PermStat(callLog) }
+                    HLine()
+                    SettingRow(Icons.Filled.Notifications, "알림 표시", "새 통화 요약·업로드 실패 알림", {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            postNotifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            // 12 이하는 권한 대신 앱 알림 설정에서 끄고 켬
+                            try {
+                                postNotifSettingsLauncher.launch(
+                                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+                                )
+                            } catch (_: Exception) {}
+                        }
+                    }) { PermStat(postNotif) }
                     HLine()
                     SettingRow(Icons.Filled.Settings, "배터리 최적화 제외", "백그라운드 안정 동작", {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

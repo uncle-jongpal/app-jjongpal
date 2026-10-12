@@ -182,11 +182,9 @@ internal fun isBatteryUnrestricted(context: Context): Boolean {
     return pm.isIgnoringBatteryOptimizations(context.packageName)
 }
 
-internal fun hasPostNotificationsPermission(context: Context): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    return nm.areNotificationsEnabled()
-}
+// 13+ 는 권한, 그 이하는 앱 알림 설정 — 둘 다 "알림이 실제로 뜨는가" 로 판단
+internal fun hasPostNotificationsPermission(context: Context): Boolean =
+    androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
 
 internal fun hasMediaAudioPermission(context: Context): Boolean {
     val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
