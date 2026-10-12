@@ -151,7 +151,9 @@ async def whisper_process_one(conn: asyncpg.Connection, row: asyncpg.Record) -> 
         err = str(e)[:1000]
         log.exception(f"[{audio_id}] FAILED: {err}")
         await conn.execute(
-            "UPDATE audio_files SET transcript_status = 'FAILED', error_message = $1 WHERE id = $2",
+            # processed_at 기록 필수: 회수 함수(reap_stuck_processing)는 FAILED 를
+            # processed_at < now()-30분 일 때만 재시도한다. NULL 이면 영영 재시도 안 됨.
+            "UPDATE audio_files SET transcript_status = 'FAILED', error_message = $1, processed_at = NOW() WHERE id = $2",
             err, audio_id,
         )
         await conn.execute(
