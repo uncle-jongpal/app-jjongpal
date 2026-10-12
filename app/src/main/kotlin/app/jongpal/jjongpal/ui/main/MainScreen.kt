@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -134,6 +135,11 @@ fun MainScreen(
     val showAllUsers by vm.showAllUsers.collectAsState()
     val syncStatus by vm.syncStatus.collectAsState()
     val isAdmin = vm.isAdmin
+
+    // 시스템 뒤로가기 — 처리기가 없어 상세·내 정보에서 뒤로 누르면 앱이 통째로 닫혔다.
+    // 내 정보 → 설정으로, 다른 탭 → 통화 탭으로. (통화 상세 닫기는 RecordScreen 안에서 처리 — 나중에 등록된 게 우선)
+    BackHandler(enabled = showProfile) { showProfile = false }
+    BackHandler(enabled = !showProfile && tab != 2) { tab = 2 }
 
     if (showProfile) {
         ProfileScreen(userName = userName, userId = userId, isAdmin = isAdmin, onBack = { showProfile = false }, onLogout = onLogout)
@@ -1103,6 +1109,9 @@ private fun RecordScreen(
     }
 
     var seg by remember { mutableIntStateOf(0) }
+    // 뒤로가기: 상세가 열려 있으면 상세만 닫고, 미처리·보관 칸이면 통화 칸으로
+    BackHandler(enabled = detailSummary != null) { detailSummary = null }
+    BackHandler(enabled = detailSummary == null && seg != 0) { seg = 0 }
     // 5칸 세그먼트라 라벨이 길면 줄바꿈됨 → 짧게 + 단일행 고정(아래 Text)
     val failLabel = if (failed.isNotEmpty()) "미처리 ${failed.size}" else "미처리"
     val segs = listOf("통화", failLabel, "보관")
