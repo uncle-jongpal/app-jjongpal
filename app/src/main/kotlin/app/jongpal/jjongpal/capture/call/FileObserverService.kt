@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -14,6 +16,7 @@ import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import app.jongpal.jjongpal.MainActivity
 import app.jongpal.jjongpal.R
 import app.jongpal.jjongpal.auth.TokenManager
@@ -25,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import timber.log.Timber
 import java.util.concurrent.Executors
 import java.security.MessageDigest
@@ -45,6 +49,11 @@ class FileObserverService : Service() {
     // 새 통화 요약 로컬 알림 폴링 루프 — onStartCommand 가 여러 번 불려도 한 번만 띄운다.
     @Volatile private var pollingStarted = false
 
+    // 화면 켜짐 즉시 확인용 — 수신기, 마지막 확인 시각(중복 방지), 동시 실행 방지 잠금
+    private var wakeReceiver: BroadcastReceiver? = null
+    @Volatile private var lastNotifierCheckMs = 0L
+    private val checkMutex = Mutex()
+
     // 통화 상태 감시 — OFFHOOK(통화중) → IDLE(종료) 전이 시점에 녹음 완성본 스캔 트리거.
     private var telephonyManager: TelephonyManager? = null
     private var telephonyCallback: TelephonyCallback? = null
@@ -58,6 +67,7 @@ class FileObserverService : Service() {
         startForegroundCompat()
         registerCallStateDetector()
         startSummaryPolling()
+        registerWakeReceiver()
         observer.start { filePath, ts ->
             if (!tokenManager.hasValidSession()) {
                 Timber.d("skipping call file (no session): %s", filePath)
@@ -80,6 +90,7 @@ class FileObserverService : Service() {
     }
 
     override fun onDestroy() {
+        unregisterWakeReceiver()
         unregisterCallStateDetector()
         observer.stop()
         super.onDestroy()
@@ -92,20 +103,62 @@ class FileObserverService : Service() {
         pollingStarted = true
         scope.launch {
             while (true) {
-                try {
-                    summaryNotifier.checkAndNotify()
-                } catch (e: Exception) {
-                    Timber.w(e, "summary polling check failed")
-                }
-                // 서버 장애 알림(받아쓰기 밀림 등)도 같은 주기로 확인 (2026-10-10, FCM 대체)
-                try {
-                    alertNotifier.checkAndNotify()
-                } catch (e: Exception) {
-                    Timber.w(e, "alert polling check failed")
-                }
+                checkNotifiersNow()
                 delay(SUMMARY_POLL_INTERVAL_MS)
             }
         }
+    }
+
+    // 새 요약 + 서버 장애 알림 확인 한 번. 주기 루프와 화면 켜짐 신호가 같이 부를 수 있어 동시 실행은 막는다.
+    private suspend fun checkNotifiersNow() {
+        if (!checkMutex.tryLock()) return
+        try {
+            lastNotifierCheckMs = System.currentTimeMillis()
+            try {
+                summaryNotifier.checkAndNotify()
+            } catch (e: Exception) {
+                Timber.w(e, "summary polling check failed")
+            }
+            // 서버 장애 알림(받아쓰기 밀림 등)도 같은 주기로 확인 (2026-10-10, FCM 대체)
+            try {
+                alertNotifier.checkAndNotify()
+            } catch (e: Exception) {
+                Timber.w(e, "alert polling check failed")
+            }
+        } finally {
+            checkMutex.unlock()
+        }
+    }
+
+    // 화면 켜짐/잠금 해제 감지 — 깊은 절전(Doze) 중엔 3분 주기 delay 가 몇십 분씩 밀려
+    // 새 요약 알림이 늦게 뜬다. 사용자가 폰을 켜는 순간 바로 한 번 확인한다(30초에 한 번까지만).
+    private fun registerWakeReceiver() {
+        if (wakeReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val now = System.currentTimeMillis()
+                if (now - lastNotifierCheckMs < WAKE_CHECK_DEBOUNCE_MS) return
+                lastNotifierCheckMs = now
+                Timber.i("wake (%s) — checking summaries now", intent?.action)
+                scope.launch { checkNotifiersNow() }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        try {
+            // 시스템 방송만 받으므로 외부 노출 안 함
+            ContextCompat.registerReceiver(this, r, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            wakeReceiver = r
+        } catch (e: Exception) {
+            Timber.w(e, "register wake receiver failed")
+        }
+    }
+
+    private fun unregisterWakeReceiver() {
+        wakeReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        wakeReceiver = null
     }
 
     // 통화 종료 감지기 등록. API 31+ 는 TelephonyCallback, 그 이하는 PhoneStateListener.
@@ -226,6 +279,8 @@ class FileObserverService : Service() {
         private const val CALL_END_SETTLE_MS = 8_000L
         // 새 통화 요약 확인 주기 (FCM 대체 로컬 폴링). 약 3분.
         private const val SUMMARY_POLL_INTERVAL_MS = 3 * 60_000L
+        // 화면 켜짐 즉시 확인의 최소 간격 — 켰다 껐다 반복해도 서버를 두드리지 않게
+        private const val WAKE_CHECK_DEBOUNCE_MS = 30_000L
 
         fun start(context: Context) {
             val intent = Intent(context, FileObserverService::class.java)
