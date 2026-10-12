@@ -25,6 +25,16 @@ interface EventDao {
     """)
     suspend fun pendingForSync(limit: Int = 50, maxRetry: Int = 5): List<EventEntity>
 
+    // 통화 업로드 전용 대기열 — 예전엔 알림·통화 섞어 50건을 뽑은 뒤 통화만 걸러,
+    // 알림이 많이 쌓이면 통화가 뒤로 밀려 안 뽑혔다(굶주림).
+    @Query("""
+        SELECT * FROM events
+        WHERE type = 'call' AND syncStatus IN ('PENDING', 'FAILED') AND retryCount < :maxRetry
+          AND phoneClassification = 'send'
+        ORDER BY timestamp ASC LIMIT :limit
+    """)
+    suspend fun pendingCallsForUpload(limit: Int = 50, maxRetry: Int = 5): List<EventEntity>
+
     // 메인 화면 "원본 알림" 탭 — 잡음 / 민감 분류 항목 숨김.
     @Query("""
         SELECT * FROM events
@@ -70,7 +80,7 @@ interface EventDao {
      *
      * 통화는 개수가 적고 하나하나가 소중하므로 **영구 포기하지 않는다.**
      * (2026-07-30 83MB 녹음이 시간 초과로 6번 실패한 뒤 그대로 묻힌 사례)
-     * 단 파일 자체가 없는 경우는 되살려도 소용없으므로 제외한다.
+     * 단 파일 자체가 없는 경우·끝내 완성 안 된 녹음(incomplete recording)은 되살려도 소용없으므로 제외한다.
      *
      * 한도(:maxRetry)를 **소진한 것만** 되살린다 — 예전엔 매번 실패 건 전부를 0으로 되돌려
      * 연속 실패 횟수가 쌓이지 않았다(0.5.8 "3번 연속 실패 시에만 알림"이 이 횟수를 쓴다).
@@ -80,6 +90,7 @@ interface EventDao {
         WHERE type = 'call' AND syncStatus = 'FAILED' AND retryCount >= :maxRetry
           AND COALESCE(lastError,'') NOT LIKE '%file missing%'
           AND COALESCE(lastError,'') NOT LIKE '%no file_path%'
+          AND COALESCE(lastError,'') NOT LIKE '%incomplete recording%'
     """)
     suspend fun requeueFailedCalls(maxRetry: Int = 5): Int
 

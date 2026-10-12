@@ -122,6 +122,10 @@ class MainViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // 아직 서버에 못 올린 통화 수 — 통화 탭에 "업로드 대기 N건" 표시용
+    val unsyncedCalls: StateFlow<Int> = eventDao.countUnsyncedCalls()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     val rawEvents: StateFlow<List<EventEntity>> = eventDao.recent()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 

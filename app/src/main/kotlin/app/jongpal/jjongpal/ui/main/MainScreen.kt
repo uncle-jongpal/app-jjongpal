@@ -132,6 +132,7 @@ fun MainScreen(
     val allAppointments by vm.allAppointments.collectAsState()
     val rawEvents by vm.rawEvents.collectAsState()
     val failed by vm.failed.collectAsState()
+    val unsyncedCalls by vm.unsyncedCalls.collectAsState()
     val showAllUsers by vm.showAllUsers.collectAsState()
     val syncStatus by vm.syncStatus.collectAsState()
     val isAdmin = vm.isAdmin
@@ -230,6 +231,7 @@ fun MainScreen(
                     onTogglePin = { id, pin -> vm.setSummaryPinned(id, pin) },
                     onRetry = { vm.retryFailed(it) },
                     onRefreshFailed = { vm.refreshFailed() },
+                    unsyncedCalls = unsyncedCalls,
                 )
                 3 -> SettingsScreen(
                     userName = userName,
@@ -1093,6 +1095,7 @@ private fun RecordScreen(
     onTogglePin: (String, Boolean) -> Unit,
     onRetry: (String) -> Unit,
     onRefreshFailed: () -> Unit,
+    unsyncedCalls: Int = 0,
 ) {
     var detailSummary by remember { mutableStateOf<SummaryEntity?>(null) }
     val c = JpTheme.colors
@@ -1120,6 +1123,10 @@ private fun RecordScreen(
         Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp)) {
             Text("삼촌이 캡처·정리한 것", style = JpText.greet, color = c.ink2)
             Text("기록", style = JpText.title, color = c.ink)
+            // 폰에서 아직 못 올린 통화가 있으면 보이게 — 업로드가 막혀도 화면에선 티가 안 났다
+            if (unsyncedCalls > 0) {
+                Text("업로드 대기 ${unsyncedCalls}건", style = JpText.meta, color = c.ink2)
+            }
         }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp)

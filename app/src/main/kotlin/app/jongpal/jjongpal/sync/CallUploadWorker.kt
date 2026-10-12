@@ -32,6 +32,13 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
+// 완성 표시(moov) 없이 마지막 수정 후 이만큼 지나면 깨진 녹음으로 본다
+internal const val INCOMPLETE_GIVE_UP_MS = 60 * 60_000L
+
+/** 덜 완성된(moov 없는) 녹음을 포기할 때인가 — 녹음 중이면 수정 시각이 계속 갱신돼 해당 안 됨 (순수 함수, 단위 테스트 대상) */
+internal fun isIncompleteGivenUp(nowMs: Long, lastModifiedMs: Long): Boolean =
+    lastModifiedMs > 0L && nowMs - lastModifiedMs > INCOMPLETE_GIVE_UP_MS
+
 @HiltWorker
 class CallUploadWorker @AssistedInject constructor(
     @Assisted ctx: Context,
@@ -78,8 +85,7 @@ class CallUploadWorker @AssistedInject constructor(
         if (revived > 0) Timber.i("업로드 실패했던 통화 %d건 재시도 대기로 되돌림", revived)
         if (requeued > 0) Timber.i("requeued %d size-mismatch calls", requeued)
 
-        val pending = eventDao.pendingForSync()
-            .filter { it.type == "call" }
+        val pending = eventDao.pendingCallsForUpload()
         if (pending.isEmpty()) return Result.success()
 
         // 토큰 미리 갱신 — 서버는 업로드 본문을 다 받은 뒤에야 인증을 확인한다. 토큰(약 1시간)이 만료돼 있으면
@@ -129,6 +135,14 @@ class CallUploadWorker @AssistedInject constructor(
             val nameLower = file.name.lowercase()
             val isMp4Family = nameLower.endsWith(".m4a") || nameLower.endsWith(".mp4")
             if (isMp4Family && !isFinalizedMp4(file)) {
+                // 마지막 수정 후 1시간이 지나도 완성 안 됐으면 녹음기가 끝내 못 닫은 깨진 파일 —
+                // 영원히 "대기"로 남아 재시도 예약만 반복하던 것을 실패로 돌리고 실패 알림 흐름(횟수 기준)에 태운다.
+                if (isIncompleteGivenUp(System.currentTimeMillis(), file.lastModified())) {
+                    Timber.w("call never finalized (no moov > 1h), marking failed %s", file.name)
+                    eventDao.updateSync(event.id, "FAILED", null, "incomplete recording", 1)
+                    if (maybeNotifyFailure(notifier, event.retryCount + 1, file.name, "녹음 파일이 끝까지 저장되지 않음(깨진 녹음)")) failed++ else quietFailed++
+                    continue
+                }
                 Timber.i("call not finalized yet (no moov), deferring %s", file.name)
                 deferred++
                 continue
