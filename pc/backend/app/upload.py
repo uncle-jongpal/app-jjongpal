@@ -9,6 +9,8 @@
 - 확장자 화이트리스트, 200MB 최대 / 4KB 최소
 - mp4/m4a 는 moov 박스 존재 검증(잘린 녹음 거부 → 앱이 원본 오삭제하는 사고 방지)
 - 저장 경로: ${STORAGE_ROOT}/audio/<user_id>/<YYYY-MM-DD>/<event_id><ext>
+  (같은 폴더 임시 파일 .<event_id><ext>.<랜덤>.part 에 받은 뒤 os.replace 로 교체)
+- 이미 등록된 통화 재업로드: 받아쓰기 끝남/파일 소모됨/처리 중이면 새 파일은 버림(응답은 동일)
 - 트랜잭션 안에서 events upsert(ON CONFLICT id) + audio_files 멱등 단일 행(event_id 당 1개)
 - user_activity_log 기록
 - 디비는 소유자 커넥션 + user_id 수동(RLS 미사용, 기존과 동일)
@@ -16,6 +18,7 @@
 
 import logging
 import os
+import uuid
 from datetime import date, datetime, timezone
 from typing import Optional
 
@@ -27,6 +30,7 @@ from .common import client_ip, log_activity
 from .jwt_utils import verify_access_from_header
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 def mp4_has_moov(path: str) -> bool:
@@ -103,9 +107,52 @@ async def upload_audio(
     dest_dir = os.path.join(config.STORAGE_ROOT, "audio", str(user_id), today)
     os.makedirs(dest_dir, exist_ok=True)
     dest_path = os.path.join(dest_dir, f"{event_id}{ext}")
+    # 2026-10-13: 최종 경로에 바로 쓰지 않고 같은 폴더 임시 파일에 받은 뒤 os.replace(원자적 교체).
+    # 받는 도중 끊기거나 같은 통화가 동시에 올라와도 받아쓰기 워커가 반쯤 쓴 파일을 읽지 않게.
+    tmp_path = os.path.join(dest_dir, f".{event_id}{ext}.{uuid.uuid4().hex}.part")
 
+    try:
+        return await _receive_and_register(
+            file, tmp_path, dest_path, ext, event_id, user_id, device_id,
+            device_timestamp, duration_sec, ip, ua,
+        )
+    finally:
+        # 어떤 경로로 끝나든(성공·거부·예외) 임시 파일은 남기지 않는다
+        _remove_quietly(tmp_path)
+
+
+def _remove_quietly(path: Optional[str]) -> None:
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("임시/중복 파일 삭제 실패 %s: %s", path, e)
+
+
+def decide_duplicate_action(existing_status: Optional[str], existing_path: Optional[str],
+                            new_path: str, existing_file_present: bool) -> str:
+    """이미 등록된 통화(event_id)가 다시 올라왔을 때 새로 받은 파일을 어떻게 할지(순수 함수).
+
+    'discard'      — 새 파일 버림 (이미 받아쓰기 끝남/파일 소모됨/처리 중/기존 파일 멀쩡함)
+    'replace'      — 같은 경로의 기존 파일을 새 파일로 원자적 교체(같은 날 재업로드, 처리 전)
+    'restore'      — 기존 행이 가리키는 파일이 디스크에 없음 → 그 경로에 새 파일을 채워 넣음
+    """
+    if existing_path is None or existing_status in ("DONE", "SKIPPED", "PROCESSING"):
+        return "discard"
+    if existing_path == new_path:
+        return "replace"
+    if existing_file_present:
+        return "discard"
+    return "restore"
+
+
+async def _receive_and_register(file, tmp_path, dest_path, ext, event_id, user_id, device_id,
+                                device_timestamp, duration_sec, ip, ua):
     total = 0
-    async with aiofiles.open(dest_path, "wb") as out:
+    async with aiofiles.open(tmp_path, "wb") as out:
         while True:
             chunk = await file.read(1 << 20)
             if not chunk:
@@ -113,7 +160,7 @@ async def upload_audio(
             total += len(chunk)
             if total > config.MAX_BYTES:
                 await out.close()
-                os.remove(dest_path)
+                _remove_quietly(tmp_path)
                 async with db.pool.acquire() as conn:
                     await log_activity(
                         conn, user_id, device_id, "upload.fail", event_id, ip, ua,
@@ -125,12 +172,9 @@ async def upload_audio(
     # 무결성 검증 — 너무 작거나(빈 토막) mp4 계열인데 moov(최종화) 없는 깨진 파일은 거부.
     # 이렇게 막아야 클라이언트가 "업로드 성공" 으로 잘못 알고 폰 원본을 지우는 사고를 방지한다.
     ext_is_mp4 = ext in config.MP4_EXT
-    moov_ok = (not ext_is_mp4) or mp4_has_moov(dest_path)
+    moov_ok = (not ext_is_mp4) or mp4_has_moov(tmp_path)
     if total < config.MIN_BYTES or not moov_ok:
-        try:
-            os.remove(dest_path)
-        except OSError:
-            pass
+        _remove_quietly(tmp_path)
         async with db.pool.acquire() as conn:
             await log_activity(
                 conn, user_id, device_id, "upload.fail", event_id, ip, ua,
@@ -147,13 +191,14 @@ async def upload_audio(
             # 시간대 정보 없는 (naive) 경우 UTC 로 가정 — timestamptz 컬럼이 서버 컨테이너 시간대로 잘못 해석되지 않도록
             if parsed_ts.tzinfo is None:
                 parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
-                logging.getLogger(__name__).warning(
+                log.warning(
                     "device_timestamp naive (no tz), assuming UTC: %s -> %s", device_timestamp, parsed_ts.isoformat()
                 )
         except ValueError as e:
-            logging.getLogger(__name__).warning("device_timestamp parse failed: %s (%s)", device_timestamp, e)
+            log.warning("device_timestamp parse failed: %s (%s)", device_timestamp, e)
             parsed_ts = None
 
+    dup_action = None
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
@@ -179,17 +224,43 @@ async def upload_audio(
                 """,
                 event_id, user_id, dest_path, total, duration_sec,
             )
-            if audio_row is None:
-                # 이미 등록된 통화 — 기존 행을 그대로 사용(중복 생성 안 함)
+            if audio_row is not None:
+                # 새 통화 → 임시 파일을 최종 경로로(커밋 전에 옮겨 두어야 워커가 빈 경로를 안 봄.
+                # 옮기기 실패 시 예외 → 트랜잭션 롤백)
+                os.replace(tmp_path, dest_path)
+            else:
+                # 이미 등록된 통화 — 기존 행을 그대로 사용(중복 생성 안 함).
+                # 행 잠금: 받아쓰기 워커가 동시에 PROCESSING 으로 바꾸는 것과 겹치지 않게.
                 audio_row = await conn.fetchrow(
-                    "SELECT id FROM audio_files WHERE event_id = $1 LIMIT 1",
+                    """
+                    SELECT id, transcript_status, file_path FROM audio_files
+                    WHERE event_id = $1 ORDER BY id LIMIT 1 FOR UPDATE
+                    """,
                     event_id,
                 )
+                existing_path = audio_row["file_path"]
+                dup_action = decide_duplicate_action(
+                    audio_row["transcript_status"], existing_path, dest_path,
+                    bool(existing_path) and os.path.exists(existing_path),
+                )
+                if dup_action == "replace":
+                    os.replace(tmp_path, dest_path)
+                    await conn.execute(
+                        "UPDATE audio_files SET size_bytes = $2 WHERE id = $1", audio_row["id"], total,
+                    )
+                elif dup_action == "restore":
+                    os.makedirs(os.path.dirname(existing_path), exist_ok=True)
+                    os.replace(tmp_path, existing_path)
+                    await conn.execute(
+                        "UPDATE audio_files SET size_bytes = $2 WHERE id = $1", audio_row["id"], total,
+                    )
+                # 'discard' → 아무것도 안 함. 임시 파일은 바깥 finally 에서 지움
+                # (이미 받아쓰기 끝나 원본이 지워진 통화에 고아 파일이 쌓이던 문제 방지)
 
-        await log_activity(
-            conn, user_id, device_id, "upload.audio", event_id, ip, ua,
-            {"size_bytes": total, "duration_sec": duration_sec, "audio_file_id": str(audio_row["id"])},
-        )
+        meta = {"size_bytes": total, "duration_sec": duration_sec, "audio_file_id": str(audio_row["id"])}
+        if dup_action:
+            meta["duplicate"] = dup_action
+        await log_activity(conn, user_id, device_id, "upload.audio", event_id, ip, ua, meta)
 
     return {
         "ok": True,

@@ -35,6 +35,10 @@ MP4_EXT = {".m4a", ".mp4"}
 MAX_BYTES = 200 * 1024 * 1024  # 200MB (nginx client_max_body_size 200M 과 일치)
 MIN_BYTES = 4 * 1024  # 4KB 미만 = 빈/깨진 토막
 
+# ===== API 문서(/docs, /redoc, /openapi.json) =====
+# 기본 꺼짐(공개 인터넷에 경로 목록·스키마 노출 방지). 개발 때만 ENABLE_API_DOCS=true.
+ENABLE_API_DOCS = os.environ.get("ENABLE_API_DOCS", "false").strip().lower() in ("1", "true", "yes", "on")
+
 # ===== 백그라운드 워커 게이트 =====
 # 기본 true. 스테이징에서 운영 대기열을 이중 소비하지 않도록 false 로 끌 수 있음.
 RUN_WORKERS = os.environ.get("RUN_WORKERS", "true").strip().lower() in ("1", "true", "yes", "on")
@@ -44,8 +48,13 @@ WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "ko")
 WHISPER_POLL_INTERVAL_SEC = int(os.environ.get("WHISPER_POLL_INTERVAL_SEC", "5"))
 WHISPER_BATCH_SIZE = int(os.environ.get("WHISPER_BATCH_SIZE", "3"))
 WHISPER_BACKEND_URL = os.environ.get("WHISPER_BACKEND_URL", "").strip().rstrip("/")
-WHISPER_TIMEOUT_SEC = int(os.environ.get("WHISPER_TIMEOUT_SEC", "600"))
+WHISPER_TIMEOUT_SEC = int(os.environ.get("WHISPER_TIMEOUT_SEC", "1200"))  # 2026-10-13 600→1200: GPU 다른 작업과 겹칠 때 여유
 WHISPER_BACKEND_BACKOFF_SEC = int(os.environ.get("WHISPER_BACKEND_BACKOFF_SEC", "15"))
+# 파일 단위 일시 오류(응답 시간초과·500 등)를 몇 번까지 재시도할지. 넘으면 FAILED 확정.
+# (받아쓰기 서버 자체가 꺼진 경우=연결 거부 등은 횟수에 안 셈 → 백오프만)
+WHISPER_MAX_TRANSIENT_ATTEMPTS = int(os.environ.get("WHISPER_MAX_TRANSIENT_ATTEMPTS", "3"))
+# 일시 오류 난 파일을 다시 집기 전 최소 대기(초). 서버가 잠깐 아플 때 몇 초 만에 시도를 다 써버리지 않게.
+WHISPER_RETRY_DELAY_SEC = int(os.environ.get("WHISPER_RETRY_DELAY_SEC", "300"))
 
 # ===== FCM 푸시 워커 =====
 # 워커가 켜질 때만 필요. 꺼져 있으면 없어도 앱은 뜬다(지연 검증).

@@ -165,9 +165,11 @@ canary 임계값 — 원본 상수 그대로
   회수/실패 판정 로직 전체가 이 DB 함수 안에 있다(아래 주의). 활동은 로그/데이터로만 남김(알림 없음).
 
 ### digest (canary --digest) — 매일 09:00
-- 오늘 올라온 통화/완료 요약 수, 요약 대기·실패·재시도소진(`retry_count>=RETRY_MAX`),
-  받아쓰기 대기·실패, 인증 상태를 한 장으로 발송(dead_sum 있으면 warn, 아니면 ok).
-- 테이블: `audio_files`, `summaries`, `transcripts(retry_count)`.
+- 오늘 올라온 통화/완료 요약 수, 요약 대기·실패·재시도소진(`attempt_count>=RETRY_MAX`),
+  받아쓰기 대기·실패·재시도소진, 인증 상태를 한 장으로 발송(소진 있으면 warn, 아니면 ok).
+- 2026-10-13: 재시도 소진 기준을 `retry_count` → `attempt_count` 로 변경. 회수 함수가
+  FAILED 재시도 때 올리는 값이 `attempt_count`(상한 3 고정)이고 `retry_count` 는 폐기된 canary 만 쓰던 값.
+- 테이블: `audio_files(attempt_count)`, `summaries`, `transcripts(attempt_count)`.
 
 
 ## 미해결 질문 / 주의 (추측하지 않고 남겨둔 것)

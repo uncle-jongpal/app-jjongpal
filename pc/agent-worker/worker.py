@@ -32,6 +32,22 @@ CLAUDE_TIMEOUT_SEC = int(os.environ.get("CLAUDE_TIMEOUT_SEC", "300"))
 POLL_INTERVAL_SEC = int(os.environ.get("AGENT_POLL_INTERVAL_SEC", "10"))
 BATCH_SIZE = int(os.environ.get("AGENT_BATCH_SIZE", "3"))
 CALL_GAP_SEC = float(os.environ.get("AGENT_CALL_GAP_SEC", "2.0"))
+# 디비 문장 하나의 최대 대기(초). 소리 없이 끊긴(반쯤 열린) 연결에서 무한 대기 방지.
+# 2026-10-13: 백엔드 받아쓰기 워커(650b74d)와 같은 방식으로 맞춤.
+DB_COMMAND_TIMEOUT_SEC = float(os.environ.get("AGENT_DB_COMMAND_TIMEOUT_SEC", "60"))
+# 디비 장애 시 재시도 대기(초): 3 → 6 → 12 … 최대 60
+RECONNECT_BACKOFF_MIN_SEC = 3.0
+RECONNECT_BACKOFF_MAX_SEC = 60.0
+
+# 디비 연결 자체가 문제인 오류. 요약 한 건 처리 중 이게 나면 그 건을 FAILED 로 찍지 않고
+# 상위 루프로 올려 풀을 버리고 새로 만든다. (ConnectionDoesNotExistError 는 InterfaceError 하위)
+DB_CONN_ERRORS = (
+    asyncpg.PostgresConnectionError,
+    asyncpg.InterfaceError,
+    asyncio.TimeoutError,  # command_timeout 초과
+)
+# 상위 루프에서 재연결로 다룰 오류 = 위 + 풀 생성 때 나는 소켓 오류(연결 거부 등)
+LOOP_CONN_ERRORS = DB_CONN_ERRORS + (ConnectionError, OSError)
 
 
 def load_prompt(name: str) -> Tuple[str, str]:
@@ -164,17 +180,20 @@ def depth_directive(text: str) -> str:
             "중복되는 잡담은 과감히 생략하고 실제로 중요한 대목 위주로 정리하세요.")
 
 
-async def process_transcript(conn: asyncpg.Connection, row: asyncpg.Record, prompt_version_id: int, prompt_body: str) -> None:
+async def process_transcript(pool: asyncpg.Pool, row: asyncpg.Record, prompt_version_id: int, prompt_body: str) -> None:
+    """한 건 요약. 클로드 호출(최대 수 분) 동안에는 디비 연결을 붙잡지 않는다
+    (그 사이 연결이 끊겨도 결과 저장 때 새 연결을 빌림)."""
     transcript_id = row["id"]
     text = row["text"]
     event_id = row["event_id"]
     user_id = row["user_id"]
     started = time.monotonic()
 
-    await conn.execute(
-        "UPDATE transcripts SET summary_status='PROCESSING' WHERE id=$1",
-        transcript_id,
-    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE transcripts SET summary_status='PROCESSING' WHERE id=$1",
+            transcript_id,
+        )
 
     log.info(f"[transcript {transcript_id}] start claude")
 
@@ -186,101 +205,142 @@ async def process_transcript(conn: asyncpg.Connection, row: asyncpg.Record, prom
 
         summary_text = parsed.get("summary") or ""
 
-        async with conn.transaction():
-            await conn.fetchrow(
-                """
-                INSERT INTO summaries (transcript_id, event_id, user_id, summary, raw_json, prompt_version_id)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id
-                """,
-                transcript_id, event_id, user_id, summary_text, json.dumps(parsed, ensure_ascii=False), prompt_version_id,
-            )
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.fetchrow(
+                    """
+                    INSERT INTO summaries (transcript_id, event_id, user_id, summary, raw_json, prompt_version_id)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
+                    """,
+                    transcript_id, event_id, user_id, summary_text, json.dumps(parsed, ensure_ascii=False), prompt_version_id,
+                )
 
-            duration_ms = int((time.monotonic() - started) * 1000)
-            await conn.execute(
-                "UPDATE transcripts SET summary_status='DONE', processed_at=NOW(), error_message=NULL WHERE id=$1",
-                transcript_id,
-            )
-            await conn.execute(
-                """
-                INSERT INTO transcript_processing_log (transcript_id, stage, status, duration_ms, prompt_version_id)
-                VALUES ($1, 'claude', 'OK', $2, $3)
-                """,
-                transcript_id, duration_ms, prompt_version_id,
-            )
+                duration_ms = int((time.monotonic() - started) * 1000)
+                await conn.execute(
+                    "UPDATE transcripts SET summary_status='DONE', processed_at=NOW(), error_message=NULL WHERE id=$1",
+                    transcript_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO transcript_processing_log (transcript_id, stage, status, duration_ms, prompt_version_id)
+                    VALUES ($1, 'claude', 'OK', $2, $3)
+                    """,
+                    transcript_id, duration_ms, prompt_version_id,
+                )
 
         log.info(
             f"[transcript {transcript_id}] done in {duration_ms} ms — "
             f"summary {len(summary_text)} chars"
         )
 
+    except DB_CONN_ERRORS:
+        # 디비 연결 문제는 이 건의 실패가 아님 → FAILED 로 찍지 않고 상위 루프에서 재연결.
+        # 행은 PROCESSING 으로 남지만 회수 함수(reap_stuck_processing)가 15분 뒤 PENDING 으로 되돌린다.
+        raise
+
     except Exception as e:
         duration_ms = int((time.monotonic() - started) * 1000)
         err = str(e)[:1000]
         log.exception(f"[transcript {transcript_id}] FAILED: {err}")
-        await conn.execute(
-            "UPDATE transcripts SET summary_status='FAILED', error_message=$1 WHERE id=$2",
-            err, transcript_id,
-        )
-        await conn.execute(
-            """
-            INSERT INTO transcript_processing_log (transcript_id, stage, status, message, duration_ms, prompt_version_id)
-            VALUES ($1, 'claude', 'FAILED', $2, $3, $4)
-            """,
-            transcript_id, err, duration_ms, prompt_version_id,
-        )
+        async with pool.acquire() as conn:
+            await conn.execute(
+                # processed_at 기록 필수: 회수 함수(reap_stuck_processing)는 FAILED 를
+                # processed_at < now()-30분 일 때만 재시도한다. NULL 이면 영영 재시도 안 됨.
+                "UPDATE transcripts SET summary_status='FAILED', error_message=$1, processed_at=NOW() WHERE id=$2",
+                err, transcript_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO transcript_processing_log (transcript_id, stage, status, message, duration_ms, prompt_version_id)
+                VALUES ($1, 'claude', 'FAILED', $2, $3, $4)
+                """,
+                transcript_id, err, duration_ms, prompt_version_id,
+            )
 
 
 # ===== 메인 루프 =====
 
+async def create_pool() -> asyncpg.Pool:
+    return await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=1,
+        max_size=2,
+        command_timeout=DB_COMMAND_TIMEOUT_SEC,
+        # 오래 놀던 연결은 버리고 새로 맺음(끊긴 연결 재사용 방지)
+        max_inactive_connection_lifetime=300,
+    )
+
+
+async def close_pool(pool) -> None:
+    if pool is None:
+        return
+    try:
+        await asyncio.wait_for(pool.close(), timeout=10)
+    except Exception:
+        pool.terminate()
+
+
+async def run_cycle(pool: asyncpg.Pool, prompt: dict) -> bool:
+    """대기 중 요약 한 묶음 처리. 처리한 게 있으면 True.
+
+    2026-10-13: 연결 하나를 영원히 붙잡던 구조 → 회차마다 풀에서 빌림.
+    (백엔드 받아쓰기 워커가 10/09 디비 리셋 후 끊긴 연결에 묶여 19시간 멈춘 사고와 같은 구멍)
+    """
+    async with pool.acquire() as conn:
+        new_pv = await ensure_prompt_version(conn, "call_summarize")
+        if new_pv != prompt["pv"]:
+            if prompt["pv"] is not None:
+                log.info(f"call prompt version changed: {prompt['pv']} → {new_pv}")
+            prompt["body"], _ = load_prompt("call_summarize")
+            prompt["pv"] = new_pv
+
+        transcripts = await conn.fetch(
+            """
+            SELECT id, text, event_id, user_id
+            FROM transcripts
+            WHERE summary_status='PENDING'
+            ORDER BY created_at
+            LIMIT $1
+            """,
+            BATCH_SIZE,
+        )
+
+    for row in transcripts:
+        await process_transcript(pool, row, prompt["pv"], prompt["body"])
+        await asyncio.sleep(CALL_GAP_SEC)
+    return bool(transcripts)
+
+
 async def main() -> None:
     log.info("agent-worker 시작 (호스트 systemd, 통화 요약 전용)")
 
+    pool = None
+    prompt = {"pv": None, "body": ""}
+    backoff = RECONNECT_BACKOFF_MIN_SEC
+
     while True:
         try:
-            conn = await asyncpg.connect(DATABASE_URL)
-        except Exception as e:
-            log.warning(f"디비 연결 실패. 5초 후 재시도: {e}")
-            await asyncio.sleep(5)
-            continue
-
-        try:
-            call_body, _ = load_prompt("call_summarize")
-            call_pv = await ensure_prompt_version(conn, "call_summarize")
-
-            while True:
-                # 통화 처리 대기 폴링
-                transcripts = await conn.fetch(
-                    """
-                    SELECT id, text, event_id, user_id
-                    FROM transcripts
-                    WHERE summary_status='PENDING'
-                    ORDER BY created_at
-                    LIMIT $1
-                    """,
-                    BATCH_SIZE,
-                )
-                if transcripts:
-                    for row in transcripts:
-                        await process_transcript(conn, row, call_pv, call_body)
-                        await asyncio.sleep(CALL_GAP_SEC)
-                    continue
-
-                # 대기 + 프롬프트 변경 감지
+            if pool is None:
+                pool = await create_pool()
+                log.info("디비 풀 연결됨")
+            busy = await run_cycle(pool, prompt)
+            backoff = RECONNECT_BACKOFF_MIN_SEC
+            if not busy:
                 await asyncio.sleep(POLL_INTERVAL_SEC)
-                new_call_pv = await ensure_prompt_version(conn, "call_summarize")
-                if new_call_pv != call_pv:
-                    log.info(f"call prompt version changed: {call_pv} → {new_call_pv}")
-                    call_body, _ = load_prompt("call_summarize")
-                    call_pv = new_call_pv
-
-        except (asyncpg.PostgresConnectionError, ConnectionResetError, OSError) as e:
-            log.warning(f"디비 연결 끊김. 재연결: {e}")
-            try:
-                await conn.close()
-            except Exception:
-                pass
-            await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            raise
+        except LOOP_CONN_ERRORS as e:
+            log.warning(f"디비 연결 문제. {backoff:.0f}초 후 재연결: {type(e).__name__}: {e}")
+            await close_pool(pool)
+            pool = None
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SEC)
+        except Exception as e:
+            # 프롬프트 파일 오류 등 예상 밖 오류 — 죽지 않고 대기 후 재시도
+            log.exception(f"루프 오류. {backoff:.0f}초 후 재시도: {e}")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, RECONNECT_BACKOFF_MAX_SEC)
 
 
 if __name__ == "__main__":
