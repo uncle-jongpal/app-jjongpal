@@ -45,9 +45,10 @@ class SyncWorker @AssistedInject constructor(
             val full = inputData.getBoolean(KEY_FULL_PULL, false)
             val limit = if (full) SummaryRepository.FULL_LIMIT else SummaryRepository.PERIODIC_LIMIT
             val sums = summaryRepository.pullFromServer(limit)
-            Timber.i("summaries pulled=%d (full=%s)", sums, full)
+            Timber.i("summaries pulled=%s (full=%s)", sums, full)
 
-            syncStatusStore.record(ok = true)
+            // "PC 연결" 표시등 = 요약 받기가 실제로 서버 2xx 를 받았는가. (예전엔 무조건 성공으로 기록)
+            syncStatusStore.record(ok = sums != null)
             Result.success()
         } catch (e: Exception) {
             Timber.e(e, "SyncWorker error")

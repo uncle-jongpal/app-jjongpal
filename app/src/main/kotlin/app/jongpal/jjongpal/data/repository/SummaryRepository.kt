@@ -39,18 +39,27 @@ class SummaryRepository @Inject constructor(
      * 서버 요약을 받아 로컬에 합친다.
      * - 정기 동기화는 최근 [PERIODIC_LIMIT]건만(15분마다 2000건씩 받던 낭비 제거)
      * - 사용자가 당겨서 새로고침하면 [FULL_LIMIT]건 전체
+     * - 서버 응답 실패(2xx 아님·연결 실패)는 null — 설정 화면 연결 표시등이 이걸 본다
      */
-    suspend fun pullFromServer(limit: Int = PERIODIC_LIMIT): Int {
-        return try {
-            val resp = pcApi.listSummaries(userIdEq = currentUserFilter(), limit = limit)
-            if (!resp.isSuccessful) {
-                Timber.w("listSummaries failed ${resp.code()}")
-                return 0
-            }
-            val items = resp.body() ?: return 0
-            saveFromServer(items, transcriptLimit = limit)
+    suspend fun pullFromServer(limit: Int = PERIODIC_LIMIT): Int? {
+        // 반환값: 받은 건수, 서버가 2xx 로 답하지 않았거나 연결 실패면 null.
+        // (예전엔 실패도 0 으로 삼켜 설정의 "PC 연결" 표시등이 늘 초록이었다)
+        val resp = try {
+            pcApi.listSummaries(userIdEq = currentUserFilter(), limit = limit)
         } catch (e: Exception) {
             Timber.e(e, "pullFromServer error")
+            return null
+        }
+        if (!resp.isSuccessful) {
+            Timber.w("listSummaries failed ${resp.code()}")
+            return null
+        }
+        val items = resp.body() ?: return 0
+        // 로컬 저장 실패는 서버 연결 문제가 아니므로 연결 상태엔 반영하지 않음
+        return try {
+            saveFromServer(items, transcriptLimit = limit)
+        } catch (e: Exception) {
+            Timber.e(e, "summary local save error")
             0
         }
     }
