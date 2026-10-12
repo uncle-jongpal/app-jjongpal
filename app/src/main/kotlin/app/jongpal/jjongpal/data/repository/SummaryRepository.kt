@@ -35,19 +35,52 @@ class SummaryRepository @Inject constructor(
 
     fun recentByUser(userId: Int): Flow<List<SummaryEntity>> = dao.recentByUser(userId)
 
-    suspend fun pullFromServer(): Int {
+    /**
+     * 서버 요약을 받아 로컬에 합친다.
+     * - 정기 동기화는 최근 [PERIODIC_LIMIT]건만(15분마다 2000건씩 받던 낭비 제거)
+     * - 사용자가 당겨서 새로고침하면 [FULL_LIMIT]건 전체
+     */
+    suspend fun pullFromServer(limit: Int = PERIODIC_LIMIT): Int {
         return try {
-            val resp = pcApi.listSummaries(userIdEq = currentUserFilter())
+            val resp = pcApi.listSummaries(userIdEq = currentUserFilter(), limit = limit)
             if (!resp.isSuccessful) {
                 Timber.w("listSummaries failed ${resp.code()}")
                 return 0
             }
             val items = resp.body() ?: return 0
+            saveFromServer(items, transcriptLimit = limit)
+        } catch (e: Exception) {
+            Timber.e(e, "pullFromServer error")
+            0
+        }
+    }
 
-            // 통화 원문(받아쓰기) + 문장별 시간 정보 같이 받아오기 — "이 문장부터 듣기" 기능용
-            val trByEvent = HashMap<String, Pair<String?, String?>>()
+    /**
+     * 서버에서 받은 요약 목록을 로컬 DB 에 합쳐 넣는다(동기화·새 요약 알림 공용).
+     *
+     * 원문(받아쓰기)은 로컬에 아직 없는 요약이 있을 때만 받는다 — 예전엔 매번 원문 2000건(전문+문장 시간)을
+     * 통째로 받았다. 서버 원문 목록은 통화별 필터를 지원하지 않아 최신순 [transcriptLimit]건을 받아 짝짓는다.
+     * 덮어쓰기(REPLACE) 전에 로컬 행과 합쳐 원문·재생 경로·읽음 표시가 지워지지 않게 한다.
+     */
+    suspend fun saveFromServer(items: List<SummaryDto>, transcriptLimit: Int = PERIODIC_LIMIT): Int {
+        if (items.isEmpty()) return 0
+        val existing = HashMap<String, SummaryEntity>()
+        // SQLite 변수 개수 한도 대비 나눠서 조회
+        items.map { it.id }.chunked(500).forEach { chunk ->
+            dao.getByIds(chunk).forEach { existing[it.id] = it }
+        }
+
+        // 원문을 받는 조건: 로컬에 처음 들어오는 요약이 있을 때. 전체 새로고침(큰 limit)일 땐 원문 빠진 요약도.
+        // (서버에 원문이 아예 없는 요약 때문에 15분마다 원문 목록을 다시 받는 일이 없게 기존 행은 평소엔 제외)
+        val full = transcriptLimit >= FULL_LIMIT
+        val needTranscript = items.any { dto ->
+            val local = existing[dto.id]
+            dto.event_id != null && (local == null || (full && local.transcriptText == null))
+        }
+        val trByEvent = HashMap<String, Pair<String?, String?>>()
+        if (needTranscript) {
             try {
-                val tr = pcApi.listTranscripts()
+                val tr = pcApi.listTranscripts(limit = transcriptLimit)
                 if (tr.isSuccessful) {
                     tr.body()?.forEach { t ->
                         val ev = t.event_id ?: return@forEach
@@ -58,34 +91,30 @@ class SummaryRepository @Inject constructor(
             } catch (e: Exception) {
                 Timber.w(e, "원문 받아오기 실패 — 요약만 갱신")
             }
-
-            // 폰에 남아 있는 녹음 파일 경로 (있으면 재생 가능)
-            val audioByEvent = HashMap<String, String>()
-            try {
-                eventDao.callsWithFile().forEach { ev ->
-                    val path = runCatching { mapAdapter.fromJson(ev.metadataJson ?: "{}") }
-                        .getOrNull()?.get("file_path") as? String
-                    if (!path.isNullOrBlank()) audioByEvent[ev.id] = path
-                }
-            } catch (e: Exception) {
-                Timber.w(e, "녹음 경로 조회 실패")
-            }
-
-            val entities = items.map { dto ->
-                val e = dto.toEntity()
-                val tr = dto.event_id?.let { trByEvent[it] }
-                e.copy(
-                    transcriptText = tr?.first,
-                    segmentsJson = tr?.second,
-                    audioPath = dto.event_id?.let { audioByEvent[it] },
-                )
-            }
-            dao.upsertAll(entities)
-            entities.size
-        } catch (e: Exception) {
-            Timber.e(e, "pullFromServer error")
-            0
         }
+
+        // 폰에 남아 있는 녹음 파일 경로 (있으면 재생 가능)
+        val audioByEvent = HashMap<String, String>()
+        try {
+            eventDao.callsWithFile().forEach { ev ->
+                val path = runCatching { mapAdapter.fromJson(ev.metadataJson ?: "{}") }
+                    .getOrNull()?.get("file_path") as? String
+                if (!path.isNullOrBlank()) audioByEvent[ev.id] = path
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "녹음 경로 조회 실패")
+        }
+
+        val entities = items.map { dto ->
+            mergeWithLocal(
+                server = dto.toEntity(),
+                local = existing[dto.id],
+                transcript = dto.event_id?.let { trByEvent[it] },
+                audioPath = dto.event_id?.let { audioByEvent[it] },
+            )
+        }
+        dao.upsertAll(entities)
+        return entities.size
     }
 
     suspend fun markViewed(id: String) {
@@ -131,6 +160,13 @@ class SummaryRepository @Inject constructor(
             pinned = pinned,
         )
 
+    companion object {
+        /** 정기 동기화로 받는 최근 요약 수 */
+        const val PERIODIC_LIMIT = 100
+        /** 사용자가 직접 새로고침할 때 받는 요약 수(예전 정기 동기화 값) */
+        const val FULL_LIMIT = 2000
+    }
+
     // ISO 8601 파싱 — 소수점초 없음/마이크로초/오프셋(+09:00·Z·-07:00) 모두 허용.
     private fun parseIso(s: String): Long? = try {
         java.time.OffsetDateTime.parse(s).toInstant().toEpochMilli()
@@ -148,3 +184,19 @@ class SummaryRepository @Inject constructor(
         return if (uid > 0) "eq.$uid" else null
     }
 }
+
+/**
+ * 서버 요약 + 로컬 행 합치기 (순수 함수 — 단위 테스트 대상).
+ * 서버 값(요약·핀)이 기준이고, 서버가 안 주는 로컬 전용 값(원문·문장 시간·재생 경로·읽음)은 보존한다.
+ */
+internal fun mergeWithLocal(
+    server: SummaryEntity,
+    local: SummaryEntity?,
+    transcript: Pair<String?, String?>?,
+    audioPath: String?,
+): SummaryEntity = server.copy(
+    transcriptText = transcript?.first ?: local?.transcriptText,
+    segmentsJson = transcript?.second ?: local?.segmentsJson,
+    audioPath = audioPath ?: local?.audioPath,
+    viewed = local?.viewed ?: false,
+)

@@ -8,6 +8,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -20,9 +21,11 @@ class SyncScheduler @Inject constructor(@ApplicationContext private val context:
         .setRequiredNetworkType(NetworkType.CONNECTED)
         .build()
 
-    fun scheduleNow() {
+    /** [fullPull] = 요약 전체 받기(당겨서 새로고침). 평소엔 최근 것만. */
+    fun scheduleNow(fullPull: Boolean = false) {
         val sync = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(networkConstraint)
+            .setInputData(workDataOf(SyncWorker.KEY_FULL_PULL to fullPull))
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             "sync-now", ExistingWorkPolicy.REPLACE, sync,

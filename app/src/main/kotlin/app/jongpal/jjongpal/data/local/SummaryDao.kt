@@ -24,6 +24,10 @@ interface SummaryDao {
     @Query("SELECT * FROM summaries WHERE id = :id")
     suspend fun get(id: String): SummaryEntity?
 
+    // 서버에서 받은 요약과 합칠 로컬 행 — 원문·재생 경로·읽음 표시를 덮어쓰지 않게 하기 위함
+    @Query("SELECT * FROM summaries WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<SummaryEntity>
+
     @Query("UPDATE summaries SET viewed = 1 WHERE id = :id")
     suspend fun markViewed(id: String)
 

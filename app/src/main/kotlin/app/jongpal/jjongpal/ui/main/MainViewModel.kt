@@ -157,8 +157,9 @@ class MainViewModel @Inject constructor(
         loadPhones()
     }
 
+    // 사용자가 직접 새로고침 — 요약을 최근 것만이 아니라 전체 다시 받는다
     fun refresh() {
-        syncScheduler.scheduleNow()
+        syncScheduler.scheduleNow(fullPull = true)
         refreshFailed()
         loadPhones()
     }
