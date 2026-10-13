@@ -29,6 +29,9 @@ class Config:
     # <secret> Discord 웹훅 URL. 원본 canary 는 이 env 를 선언만 하고 실제 발송엔
     # 안 썼다(폰 FCM 푸시만 사용). 여기선 설정돼 있으면 웹훅에도 같이 보낸다.
     alert_webhook: str
+    # <secret> 웹훅 대신 봇 토큰으로 채널에 직접 올릴 때 (fleet 서버 🩺-서비스 채널, 2026-10-13)
+    alert_bot_token: str
+    alert_channel_id: str
     # <secret> FCM 서비스 계정 JSON 경로 (컨테이너에 마운트)
     fcm_project_id: str
     fcm_credentials: str
@@ -70,6 +73,8 @@ def load() -> Config:
     return Config(
         database_url=db,
         alert_webhook=_str("JJ_ALERT_WEBHOOK", ""),
+        alert_bot_token=_str("JJ_ALERT_BOT_TOKEN", ""),
+        alert_channel_id=_str("JJ_ALERT_CHANNEL_ID", ""),
         fcm_project_id=_str("FIREBASE_PROJECT_ID", "jjongpal-app"),
         fcm_credentials=_str("FIREBASE_CREDENTIALS", "/secrets/service-account.json"),
         state_file=_str("WATCHDOG_STATE_FILE", "/data/state.json"),

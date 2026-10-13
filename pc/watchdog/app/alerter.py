@@ -6,7 +6,8 @@
   - FCM HTTP v1 data-only 메시지({type:alert,title,body,level})로 푸시 (베젤 안 거침)
   - 폰은 마크다운을 못 살리므로 본문에서 **, ` 를 떼고 900자로 자른다
 
-추가: JJ_ALERT_WEBHOOK 이 설정돼 있으면 Discord 웹훅에도 같은 내용을 텍스트로 보낸다.
+추가: 장애(warn·crit)는 Discord 에도 보낸다. JJ_ALERT_WEBHOOK 이 있으면 웹훅,
+없으면 JJ_ALERT_BOT_TOKEN + JJ_ALERT_CHANNEL_ID 로 봇이 채널에 직접 올린다.
 (원본은 이 env 를 선언만 하고 실제로는 FCM 만 썼다 — NOTES.md 참조)
 
 비밀값(<secret>)은 로그에 찍지 않는다.
@@ -100,17 +101,26 @@ class Alerter:
                     log.warning("폰 푸시 오류: %s", e)
 
     async def _post_webhook(self, title: str, lines: List[str], level: str) -> None:
+        # 디스코드에는 장애(warn·crit)만 올린다. 해소·복구·일일요약은 앱 알림함에만 (2026-10-13 형 결정)
+        if level not in ("warn", "crit"):
+            return
         url = self.cfg.alert_webhook
+        headers = {}
+        if not url and self.cfg.alert_bot_token and self.cfg.alert_channel_id:
+            url = f"https://discord.com/api/v10/channels/{self.cfg.alert_channel_id}/messages"
+            # 기본 UA 는 Cloudflare 가 막을 수 있어 디스코드 봇 형식 UA 를 붙인다
+            headers = {"Authorization": f"Bot {self.cfg.alert_bot_token}",
+                       "User-Agent": "DiscordBot (https://jjongpal, 1.0)"}
         if not url:
             return
-        emoji = {"crit": "🚨", "warn": "⚠️", "info": "🛠️", "ok": "✅"}.get(level, "•")
+        emoji = {"crit": "🚨", "warn": "⚠️"}[level]
         # Discord 규칙: 가로줄/표 금지 → 헤더 텍스트 + 불릿만. 2000자 제한.
         body = "\n".join(f"- {ln}" for ln in lines)
-        content = f"{emoji} **{title}**\n{body}"[:1900]
+        content = f"{emoji} **쫑팔 · {title}**\n{body}"[:1900]
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.post(url, json={"content": content})
+                r = await client.post(url, json={"content": content}, headers=headers)
                 if r.status_code >= 300:
-                    log.warning("웹훅 발송 실패 %s", r.status_code)
+                    log.warning("디스코드 발송 실패 %s", r.status_code)
         except Exception as e:
-            log.warning("웹훅 오류: %s", e)
+            log.warning("디스코드 발송 오류: %s", type(e).__name__)

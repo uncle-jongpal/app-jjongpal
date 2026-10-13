@@ -93,6 +93,7 @@ pc/watchdog/
 
 알림/비밀 (코드에 박지 않음, env/마운트로 주입)
 - `JJ_ALERT_WEBHOOK` — Discord 웹훅 URL (없으면 웹훅 발송 생략). **<secret>**
+- `JJ_ALERT_BOT_TOKEN`·`JJ_ALERT_CHANNEL_ID` — 웹훅이 없을 때 봇으로 채널에 직접 발송(운영은 fleet 🩺-서비스 채널). 장애(warn·crit)만 보냄. **<secret>**
 - `FIREBASE_PROJECT_ID` — 기본 `jjongpal-app`
 - `FIREBASE_CREDENTIALS` — FCM 서비스계정 JSON 경로, 기본 `/secrets/service-account.json`
   (컨테이너에 읽기전용 마운트). **<secret 파일>**
