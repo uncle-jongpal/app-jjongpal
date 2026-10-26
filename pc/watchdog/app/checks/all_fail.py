@@ -30,10 +30,10 @@ class AllFailCheck(Check):
 
         res.states["all_failing"] = StateCondition(
             active=all_failing,
-            title="요약이 전부 실패 중",
+            title="요약 전체 실패",
             lines=[
                 f"최근 1시간 성공 **0건**, 실패 **{f['fail']}건**.",
-                "인증 만료·프롬프트 오류·모델 응답 문제 가능성.",
+                "추정 원인: 인증 만료, 프롬프트 오류, 모델 응답 이상.",
             ],
             level="crit",
         )

@@ -73,7 +73,7 @@ class AlertNotifier @Inject constructor(
             if (nm.getNotificationChannel(CHANNEL_ID) == null) {
                 nm.createNotificationChannel(
                     NotificationChannel(CHANNEL_ID, "쫑팔 서버 장애", NotificationManager.IMPORTANCE_HIGH)
-                        .apply { description = "받아쓰기·요약이 밀리거나 실패하면 알려줘요" }
+                        .apply { description = "받아쓰기·요약 처리 지연 및 실패 알림" }
                 )
             }
         }
@@ -83,7 +83,7 @@ class AlertNotifier @Inject constructor(
             "ok" -> "✅ "
             else -> ""
         }
-        val text = if (!body.isNullOrBlank()) body else "앱에서 확인해 주세요"
+        val text = if (!body.isNullOrBlank()) body else "앱에서 상세 내용을 확인하세요."
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }

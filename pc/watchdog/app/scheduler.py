@@ -43,7 +43,7 @@ class Scheduler:
             await self.ctx.alerter.notify(cond.title, cond.lines, cond.level)
             self.ctx.state.set_flag(key, True)
         elif not cond.active and was:
-            await self.ctx.alerter.notify(f"{cond.title} — 해소됨", ["정상으로 돌아왔어."], "ok")
+            await self.ctx.alerter.notify(f"{cond.title} 해소", ["정상 처리 상태로 복구되었습니다."], "ok")
             self.ctx.state.set_flag(key, False)
 
     async def _run_check(self, check: Check) -> None:
@@ -53,7 +53,7 @@ class Scheduler:
             log.error("체크 %s 실패:\n%s", check.name, traceback.format_exc())
             # 감시 스크립트 자체 실패에 준하는 알림 (canary 의 최상위 except 와 유사)
             await self.ctx.alerter.notify(
-                f"감시 체크 '{check.name}' 가 실패했어",
+                f"감시 항목 오류: {check.name}",
                 [f"```{traceback.format_exc()[-1200:]}```"], "crit")
             return
         for key, cond in result.states.items():

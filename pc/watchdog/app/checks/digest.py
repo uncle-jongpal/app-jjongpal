@@ -39,7 +39,7 @@ class DigestJob(Check):
         if auth_val is None:
             auth_line = "인증 상태: 미점검(점검 꺼짐)" if not cfg.auth_enabled else "인증 상태: 미점검(아직 결과 없음)"
         else:
-            auth_line = f"인증 상태: {'정상' if auth_ok else '**끊김**'}"
+            auth_line = f"인증 상태: {'정상' if auth_ok else '**만료**'}"
         lines = [
             f"오늘 올라온 통화 **{d['today_audio']}건** · 요약 완료 **{d['today_sum']}건**",
             f"요약 대기 {d['pend_sum']} · 실패 {d['fail_sum']} (재시도 소진 **{d['dead_sum']}**)",
@@ -47,6 +47,6 @@ class DigestJob(Check):
             auth_line,
         ]
         level = "ok" if auth_ok and d["dead_sum"] == 0 and d["dead_tr"] == 0 else "warn"
-        res.notifications.append(Notification("오늘의 현황", lines, level))
+        res.notifications.append(Notification("일일 운영 현황", lines, level))
         res.data = dict(d)
         return res

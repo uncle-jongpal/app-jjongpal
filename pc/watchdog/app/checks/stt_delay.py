@@ -36,10 +36,10 @@ class SttDelayCheck(Check):
         summary_stall = s["waiting"] > 0 and s["oldest_h"] > cfg.summary_stall_h and prog["n"] == 0
         res.states["summary_stall"] = StateCondition(
             active=summary_stall,
-            title="요약이 밀려 있어",
+            title="요약 처리 지연",
             lines=[
-                f"대기 **{s['waiting']}건**, 가장 오래된 게 **{s['oldest_h']:.1f}시간째**.",
-                "워커가 살아 있어도 결과가 안 나오는 상황일 수 있어.",
+                f"대기 **{s['waiting']}건**, 최장 대기 **{s['oldest_h']:.1f}시간**.",
+                "처리는 실행 중이나 결과가 생성되지 않을 수 있습니다.",
             ],
             level="crit",
         )
@@ -58,8 +58,8 @@ class SttDelayCheck(Check):
         transcribe_stall = t["waiting"] > 0 and t["oldest_h"] > cfg.transcribe_stall_h and tprog["n"] == 0
         res.states["transcribe_stall"] = StateCondition(
             active=transcribe_stall,
-            title="받아쓰기가 밀려 있어",
-            lines=[f"대기 **{t['waiting']}건**, 가장 오래된 게 **{t['oldest_h']:.1f}시간째**."],
+            title="받아쓰기 처리 지연",
+            lines=[f"대기 **{t['waiting']}건**, 최장 대기 **{t['oldest_h']:.1f}시간**."],
             level="warn",
         )
 

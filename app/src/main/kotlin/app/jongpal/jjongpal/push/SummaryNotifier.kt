@@ -99,11 +99,11 @@ class SummaryNotifier @Inject constructor(
             if (nm.getNotificationChannel(ch) == null) {
                 nm.createNotificationChannel(
                     NotificationChannel(ch, "쫑팔 통화 정리", NotificationManager.IMPORTANCE_DEFAULT)
-                        .apply { description = "통화 정리가 끝나면 알려줘요" }
+                        .apply { description = "통화 요약 완료 알림" }
                 )
             }
         }
-        val body = if (!snippet.isNullOrBlank()) snippet else "눌러서 확인해요"
+        val body = if (!snippet.isNullOrBlank()) snippet else "탭하여 요약을 확인하세요."
         val n = NotificationCompat.Builder(context, ch)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle("새 통화 요약")

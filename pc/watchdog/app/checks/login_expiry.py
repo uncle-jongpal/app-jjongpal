@@ -84,11 +84,11 @@ class LoginExpiryCheck(Check):
 
         res.states["auth_dead"] = StateCondition(
             active=not ok,
-            title="인증이 끊겼어",
+            title="요약 서비스 인증 만료",
             lines=[
-                "헤드리스 클로드 호출 실패 → **요약이 전부 실패**하게 돼.",
+                "요약 요청이 모두 실패합니다.",
                 f"오류: `{err}`",
-                "→ 운영서버에서 `CLAUDE_CONFIG_DIR=/home/agent/.claude-jjongpal claude` 로 재로그인 필요",
+                "조치: 운영서버 재로그인 필요 (`CLAUDE_CONFIG_DIR=/home/agent/.claude-jjongpal claude`)",
             ],
             level="crit",
         )
