@@ -85,6 +85,11 @@ import app.jongpal.jjongpal.ui.permission.hasPostNotificationsPermission
 import app.jongpal.jjongpal.ui.permission.isBatteryUnrestricted
 import app.jongpal.jjongpal.ui.permission.isNotificationAccessGranted
 import app.jongpal.jjongpal.ui.theme.JpText
+import app.jongpal.jjongpal.update.UpdateController
+import app.jongpal.jjongpal.update.UpdatePrompt
+import app.jongpal.jjongpal.update.UpdateState
+import app.jongpal.jjongpal.update.describe
+import app.jongpal.jjongpal.update.rememberUpdateController
 import app.jongpal.jjongpal.ui.theme.JpTheme
 
 private data class NavItem(val label: String, val icon: ImageVector)
@@ -136,6 +141,12 @@ fun MainScreen(
     val showAllUsers by vm.showAllUsers.collectAsState()
     val syncStatus by vm.syncStatus.collectAsState()
     val isAdmin = vm.isAdmin
+
+    // 앱 안 업데이트 — 열 때마다 서버의 최신 버전을 확인하고, 새 버전이면 안내 창
+    val updateState by vm.updater.state.collectAsState()
+    val updateCtl = rememberUpdateController(vm.updater)
+    LaunchedEffect(Unit) { updateCtl.check() }
+    UpdatePrompt(updateState, updateCtl)
 
     // 시스템 뒤로가기 — 처리기가 없어 상세·내 정보에서 뒤로 누르면 앱이 통째로 닫혔다.
     // 내 정보 → 설정으로, 다른 탭 → 통화 탭으로. (통화 상세 닫기는 RecordScreen 안에서 처리 — 나중에 등록된 게 우선)
@@ -243,6 +254,8 @@ fun MainScreen(
                     onOpenProfile = { showProfile = true },
                     onRefresh = { vm.refresh() },
                     onLogout = onLogout,
+                    updateState = updateState,
+                    updateCtl = updateCtl,
                 )
             }
         }
@@ -1738,6 +1751,8 @@ private fun SettingsScreen(
     onOpenProfile: () -> Unit,
     onRefresh: () -> Unit,
     onLogout: () -> Unit,
+    updateState: UpdateState,
+    updateCtl: UpdateController,
 ) {
     val c = JpTheme.colors
     val ctx = LocalContext.current
@@ -1887,6 +1902,15 @@ private fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+        item { SectionHeader("앱", Modifier.padding(top = 6.dp)) }
+        item {
+            JpCard(Modifier.fillMaxWidth()) {
+                val hasNew = updateState is UpdateState.Available || updateState is UpdateState.Ready
+                SettingRow(Icons.Filled.Refresh, "앱 버전", updateState.describe(updateCtl.updater.currentVersion), { updateCtl.onTap(updateState) }) {
+                    if (hasNew) Box(Modifier.size(9.dp).clip(CircleShape).background(c.accent))
                 }
             }
         }

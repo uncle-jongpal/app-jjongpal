@@ -16,6 +16,8 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <!-- 통화 상대 전화번호 읽기 (통화 종료 시 통화기록에서 번호 확보 → 번호별 검색용) -->
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <!-- 앱 안 업데이트: 받은 새 버전 APK 설치 화면 열기 (처음 한 번 "이 출처 허용" 필요) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
@@ -82,6 +84,17 @@
                 <action android:name="android.intent.action.PHONE_STATE" />
             </intent-filter>
         </receiver>
+
+        <!-- 앱 안 업데이트: 캐시에 받은 APK 를 설치 화면에 넘기는 통로 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
 
         <!-- Hilt + WorkManager 통합 (WorkManager 기본 초기화 비활성, Hilt 가 대신 처리) -->
         <provider

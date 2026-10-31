@@ -16,6 +16,7 @@ import app.jongpal.jjongpal.data.repository.TodoRepository
 import app.jongpal.jjongpal.sync.SyncScheduler
 import app.jongpal.jjongpal.sync.SyncStatus
 import app.jongpal.jjongpal.sync.SyncStatusStore
+import app.jongpal.jjongpal.update.AppUpdater
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -38,6 +39,7 @@ class MainViewModel @Inject constructor(
     private val syncScheduler: SyncScheduler,
     private val tokenManager: TokenManager,
     private val syncStatusStore: SyncStatusStore,
+    val updater: AppUpdater,
 ) : ViewModel() {
 
     // 마지막 동기화 결과 — 설정 화면 "PC 연결" 표시등이 관찰
