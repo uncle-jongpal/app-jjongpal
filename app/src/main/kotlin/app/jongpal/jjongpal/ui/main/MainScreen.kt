@@ -85,6 +85,7 @@ import app.jongpal.jjongpal.ui.permission.hasPostNotificationsPermission
 import app.jongpal.jjongpal.ui.permission.isBatteryUnrestricted
 import app.jongpal.jjongpal.ui.permission.isNotificationAccessGranted
 import app.jongpal.jjongpal.ui.theme.JpText
+import app.jongpal.jjongpal.ui.backlog.BacklogPrompt
 import app.jongpal.jjongpal.update.UpdateController
 import app.jongpal.jjongpal.update.UpdatePrompt
 import app.jongpal.jjongpal.update.UpdateState
@@ -147,6 +148,10 @@ fun MainScreen(
     val updateCtl = rememberUpdateController(vm.updater)
     LaunchedEffect(Unit) { updateCtl.check() }
     UpdatePrompt(updateState, updateCtl)
+
+    // 밀린 통화 녹음 확인 — 로그인 직후·오래 쉬었다 켠 뒤 옛 녹음을 바로 올리지 않고 범위를 묻는다
+    val backlogHold by vm.backlog.hold.collectAsState()
+    BacklogPrompt(backlogHold, vm.backlog)
 
     // 시스템 뒤로가기 — 처리기가 없어 상세·내 정보에서 뒤로 누르면 앱이 통째로 닫혔다.
     // 내 정보 → 설정으로, 다른 탭 → 통화 탭으로. (통화 상세 닫기는 RecordScreen 안에서 처리 — 나중에 등록된 게 우선)
@@ -256,6 +261,7 @@ fun MainScreen(
                     onLogout = onLogout,
                     updateState = updateState,
                     updateCtl = updateCtl,
+                    onBacklog = { vm.backlog.reopen() },
                 )
             }
         }
@@ -1753,6 +1759,7 @@ private fun SettingsScreen(
     onLogout: () -> Unit,
     updateState: UpdateState,
     updateCtl: UpdateController,
+    onBacklog: () -> Unit,
 ) {
     val c = JpTheme.colors
     val ctx = LocalContext.current
@@ -1888,6 +1895,10 @@ private fun SettingsScreen(
                     }
                     SettingRow(Icons.Filled.Refresh, "PC 연결", syncDesc, onRefresh) {
                         Box(Modifier.size(9.dp).clip(CircleShape).background(if (healthy) c.sage else c.danger))
+                    }
+                    HLine()
+                    SettingRow(Icons.Filled.Phone, "지난 녹음 올리기", "아직 안 올린 통화 녹음을 기간을 골라 올리기", onBacklog) {
+                        Icon(Icons.Filled.KeyboardArrowRight, null, tint = c.ink3, modifier = Modifier.size(20.dp))
                     }
                     if (isAdmin) {
                         HLine()

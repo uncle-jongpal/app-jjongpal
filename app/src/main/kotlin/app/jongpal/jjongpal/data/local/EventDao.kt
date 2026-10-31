@@ -30,10 +30,10 @@ interface EventDao {
     @Query("""
         SELECT * FROM events
         WHERE type = 'call' AND syncStatus IN ('PENDING', 'FAILED') AND retryCount < :maxRetry
-          AND phoneClassification = 'send'
+          AND phoneClassification = 'send' AND timestamp >= :minTs
         ORDER BY timestamp ASC LIMIT :limit
     """)
-    suspend fun pendingCallsForUpload(limit: Int = 50, maxRetry: Int = 5): List<EventEntity>
+    suspend fun pendingCallsForUpload(limit: Int = 50, maxRetry: Int = 5, minTs: Long = 0L): List<EventEntity>
 
     // 메인 화면 "원본 알림" 탭 — 잡음 / 민감 분류 항목 숨김.
     @Query("""
@@ -94,9 +94,21 @@ interface EventDao {
     """)
     suspend fun requeueFailedCalls(maxRetry: Int = 5): Int
 
-    /** 업로드 못 한 통화 수 — 앱 화면에 실패가 보이게 하기 위함 */
-    @Query("SELECT COUNT(*) FROM events WHERE type='call' AND syncStatus != 'SYNCED'")
+    /** 업로드 못 한 통화 수 — 앱 화면에 실패가 보이게 하기 위함 (사용자가 안 올리기로 고른 HELD 는 뺌) */
+    @Query("SELECT COUNT(*) FROM events WHERE type='call' AND syncStatus NOT IN ('SYNCED', 'HELD')")
     fun countUnsyncedCalls(): Flow<Int>
+
+    // ── 밀린 녹음 범위 고르기(2026-10-31) ──
+    /** 고른 범위 밖(바닥 시각 이전) 대기 통화는 HELD = 올리지 않음(폰 원본은 그대로) */
+    @Query("UPDATE events SET syncStatus = 'HELD' WHERE type = 'call' AND syncStatus IN ('PENDING', 'FAILED') AND timestamp < :floorMs")
+    suspend fun holdCallsBefore(floorMs: Long): Int
+
+    /** 범위를 넓혀 다시 고르면 HELD 였던 통화를 대기로 되돌림 */
+    @Query("UPDATE events SET syncStatus = 'PENDING', retryCount = 0, lastError = NULL WHERE type = 'call' AND syncStatus = 'HELD' AND timestamp >= :floorMs")
+    suspend fun releaseHeldSince(floorMs: Long): Int
+
+    @Query("SELECT id, syncStatus FROM events WHERE type = 'call'")
+    suspend fun callSyncStates(): List<CallSyncState>
 
     @Query("SELECT COUNT(*) FROM events WHERE syncStatus = :status")
     fun countByStatus(status: String): Flow<Int>

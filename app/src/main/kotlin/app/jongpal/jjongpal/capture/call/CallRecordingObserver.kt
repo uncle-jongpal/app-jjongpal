@@ -18,6 +18,9 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -58,6 +61,82 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
     private var contentObserver: ContentObserver? = null
     private var callback: ((String, Long) -> Unit)? = null
 
+    // ── 밀린 녹음 확인(2026-10-31) ──
+    // 로그인 직후·오래 쉬었다 켠 뒤엔 옛 녹음을 바로 올리지 않고 "보류 시각" 이전 파일을 멈춰 둔다.
+    // 사용자가 범위(최근 7일 등)를 고르면 BacklogManager 가 바닥 시각을 정하고 전체 재스캔한다.
+    private val _backlogHold = MutableStateFlow(0L)
+    /** 0 이 아니면 그 시각 이전 녹음은 사용자가 고를 때까지 올리지 않음 */
+    val backlogHold: StateFlow<Long> = _backlogHold.asStateFlow()
+
+    fun holdBacklog(reason: String) {
+        if (prefs.getLong(KEY_HOLD_BEFORE_MS, 0L) > 0L) return
+        val now = System.currentTimeMillis()
+        prefs.edit().putLong(KEY_HOLD_BEFORE_MS, now).apply()
+        _backlogHold.value = now
+        Timber.i("밀린 녹음 보류 시작 (%s)", reason)
+    }
+
+    /** 지금 보류 중인 시각(0 = 보류 없음) — 업로드 작업이 이 시각 이전 통화는 미뤄 둔다 */
+    fun holdMs(): Long = prefs.getLong(KEY_HOLD_BEFORE_MS, 0L)
+
+    /** 처음 설치한 시각 — "전체" 범위의 바닥. 바닥 시각을 옮겨도 이 값은 그대로. */
+    fun firstInstallMs(): Long = prefs.getLong(KEY_FIRST_INSTALL_TS_MS, 0L).takeIf { it > 0L }
+        ?: prefs.getLong(KEY_INSTALL_TS_MS, 0L)
+
+    /** 사용자가 고른 범위 적용: 이 시각 이전 녹음은 앞으로 무시, 보류 해제, 다음 스캔은 책갈피 무시하고 전체. */
+    fun applyBacklogFloor(floorMs: Long, allowOldUntilMs: Long) {
+        prefs.edit()
+            .putLong(KEY_FIRST_INSTALL_TS_MS, firstInstallMs())
+            .putLong(KEY_INSTALL_TS_MS, floorMs)
+            .putLong(KEY_HOLD_BEFORE_MS, 0L)
+            .putBoolean(KEY_FULL_SCAN_PENDING, true)
+            .putLong(KEY_ALLOW_OLD_UNTIL_MS, allowOldUntilMs)
+            .apply()
+        _backlogHold.value = 0L
+    }
+
+    /** 사용자가 7일보다 넓은 범위를 직접 골랐으면 잠시 동안 서버에 "오래된 것도 처리" 표시를 보낸다. */
+    fun allowOldUploadNow(): Boolean = System.currentTimeMillis() < prefs.getLong(KEY_ALLOW_OLD_UNTIL_MS, 0L)
+
+    /** 바닥 시각부터 보류 시각 전까지, 통화 녹음 폴더에 있는 파일 (경로, 시각) — 확인 창의 개수 세기용 */
+    fun listBacklogFiles(holdMs: Long, sinceMs: Long): List<Pair<String, Long>> {
+        val out = HashMap<String, Long>()
+        val hasRelativePath = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        try {
+            val projection = arrayOf(
+                MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DATE_ADDED,
+                MediaStore.Audio.Media.DATE_MODIFIED, MediaStore.Audio.Media.SIZE,
+            )
+            val (selection, args) = if (hasRelativePath) {
+                relativePathPrefixes.joinToString(" OR ") { "${MediaStore.Audio.Media.RELATIVE_PATH} LIKE ?" } to
+                    relativePathPrefixes.map { "$it%" }.toTypedArray()
+            } else {
+                fallbackDirs.joinToString(" OR ") { "${MediaStore.Audio.Media.DATA} LIKE ?" } to
+                    fallbackDirs.map { "$it/%" }.toTypedArray()
+            }
+            context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, args, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val data = c.getString(0) ?: continue
+                    if (!isAudioExt(data) || c.getLong(3) <= 0L) continue
+                    val sec = c.getLong(2).takeIf { it > 0L } ?: c.getLong(1)
+                    val ts = if (sec > 0L) sec * 1000L else File(data).lastModified()
+                    if (ts in sinceMs until holdMs) out[data] = ts
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "backlog MediaStore query failed")
+        }
+        fallbackDirs.forEach { path ->
+            val files = try { File(path).listFiles() } catch (_: SecurityException) { null } ?: return@forEach
+            for (f in files) {
+                if (!f.isFile || !isAudioExt(f.name) || f.length() <= 0L) continue
+                val ts = f.lastModified()
+                if (ts in sinceMs until holdMs) out.putIfAbsent(f.absolutePath, ts)
+            }
+        }
+        return out.map { it.key to it.value }
+    }
+
     private val prefs: SharedPreferences by lazy {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     }
@@ -89,6 +168,17 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                 .putLong(KEY_LAST_FILESCAN_MS, nowMs)
                 .apply()
             Timber.i("seeded: installTs=%d lastMediaId=%d", nowMs, currentMaxId)
+        }
+
+        _backlogHold.value = prefs.getLong(KEY_HOLD_BEFORE_MS, 0L)
+        val nowMs = System.currentTimeMillis()
+        val lastActive = prefs.getLong(KEY_LAST_ACTIVE_MS, 0L)
+        if (!prefs.getBoolean(KEY_BACKLOG_ASKED_V1, false)) {
+            // 0.5.12 첫 실행 — 이미 쌓인 녹음이 있으면 한 번 물어본다(없으면 화면이 조용히 넘어감)
+            prefs.edit().putBoolean(KEY_BACKLOG_ASKED_V1, true).apply()
+            holdBacklog("first-run-v0.5.12")
+        } else if (lastActive > 0L && nowMs - lastActive > BACKLOG_GAP_MS) {
+            holdBacklog("idle ${(nowMs - lastActive) / 3_600_000}h")
         }
 
         // MediaStore 의 오디오 콘텐츠 URI 변경 감지 등록 — 시스템이 미디어 인덱스 갱신할 때마다 호출됨
@@ -144,10 +234,14 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         cbOverride: ((String, Long) -> Unit)? = null,
     ) {
         val cb = cbOverride ?: callback ?: return
+        // 사용자가 범위를 고른 직후엔 책갈피 무시하고 바닥 시각 이후 전부 다시 훑는다(로그아웃 중 놓친 것 포함)
+        val full = ignoreWatermark || prefs.getBoolean(KEY_FULL_SCAN_PENDING, false)
         scanMutex.withLock {
-            scanMediaStore(reason, cb, ignoreWatermark)
-            scanFallbackDirs(cb, reason, ignoreWatermark)
+            scanMediaStore(reason, cb, full)
+            scanFallbackDirs(cb, reason, full)
         }
+        if (full && !ignoreWatermark) prefs.edit().putBoolean(KEY_FULL_SCAN_PENDING, false).apply()
+        prefs.edit().putLong(KEY_LAST_ACTIVE_MS, System.currentTimeMillis()).apply()
         maybeRescanRecent(cb)
     }
 
@@ -242,6 +336,12 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                         if (id > maxId) maxId = id
                         continue
                     }
+                    // 밀린 녹음 보류 중 — 보류 시각 이전 파일은 사용자가 범위를 고를 때까지 손대지 않음
+                    val holdMs = prefs.getLong(KEY_HOLD_BEFORE_MS, 0L)
+                    if (holdMs > 0L && effectiveTsMs < holdMs) {
+                        if (id > maxId) maxId = id
+                        continue
+                    }
                     // 재확인 모드 — 지정 시각 이전 파일은 건너뜀 (최근 것만 다시 본다)
                     if (sinceMs > 0L && effectiveTsMs < sinceMs) {
                         if (id > maxId) maxId = id
@@ -300,6 +400,8 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
                 if (file.length() <= 0L) continue
                 val mtime = file.lastModified()
                 if (mtime <= threshold) continue
+                val holdMs = prefs.getLong(KEY_HOLD_BEFORE_MS, 0L)
+                if (holdMs > 0L && mtime < holdMs) continue
                 var consumed = false
                 try {
                     cb(file.absolutePath, mtime)
@@ -335,6 +437,11 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
 
     private fun isSizeStable(path: String, size: Long): Boolean {
         if (size <= 0L) return false
+        // 마지막 수정이 2분 넘게 지난 파일은 다 쓰인 것 — 밀린 녹음 재스캔이 한 번에 등록되게(두 번 볼 필요 없음)
+        if (System.currentTimeMillis() - File(path).lastModified() > SETTLED_MS) {
+            lastSeenSizes.remove(path)
+            return true
+        }
         val prev = lastSeenSizes[path]
         lastSeenSizes[path] = size
         // 처음 본 파일이면 다음 스캔까지 보류, 크기가 그대로면 완성으로 판단
@@ -351,6 +458,15 @@ class CallRecordingObserver @Inject constructor(@ApplicationContext private val 
         private const val KEY_INSTALL_TS_MS = "install_ts_ms"
         private const val KEY_BACKFILL_V1_DONE = "backfill_v1_done"
         private const val KEY_LAST_RESCAN_MS = "last_rescan_ms"
+        private const val KEY_HOLD_BEFORE_MS = "backlog_hold_before_ms"
+        private const val KEY_FIRST_INSTALL_TS_MS = "first_install_ts_ms"
+        private const val KEY_FULL_SCAN_PENDING = "full_scan_pending"
+        private const val KEY_ALLOW_OLD_UNTIL_MS = "allow_old_upload_until_ms"
+        private const val KEY_LAST_ACTIVE_MS = "last_active_ms"
+        private const val KEY_BACKLOG_ASKED_V1 = "backlog_asked_v1"
+        /** 이만큼 스캔이 없었으면(앱이 꺼져 있었거나 로그아웃) 다시 켤 때 밀린 녹음을 물어본다 */
+        private const val SETTLED_MS = 2L * 60 * 1000
+        private const val BACKLOG_GAP_MS = 2L * 24 * 60 * 60 * 1000
         /** 상시 재확인 주기 — 하루 1회 */
         private const val RESCAN_INTERVAL_MS = 24L * 60 * 60 * 1000
         /** 재확인 범위 — 최근 7일치 녹음은 책갈피와 무관하게 다시 훑는다 */

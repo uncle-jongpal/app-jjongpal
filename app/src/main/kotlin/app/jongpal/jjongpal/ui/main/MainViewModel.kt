@@ -3,6 +3,7 @@ package app.jongpal.jjongpal.ui.main
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.jongpal.jjongpal.auth.TokenManager
+import app.jongpal.jjongpal.capture.call.BacklogManager
 import app.jongpal.jjongpal.data.local.AppointmentEntity
 import app.jongpal.jjongpal.data.local.EventDao
 import app.jongpal.jjongpal.data.local.EventEntity
@@ -40,6 +41,7 @@ class MainViewModel @Inject constructor(
     private val tokenManager: TokenManager,
     private val syncStatusStore: SyncStatusStore,
     val updater: AppUpdater,
+    val backlog: BacklogManager,
 ) : ViewModel() {
 
     // 마지막 동기화 결과 — 설정 화면 "PC 연결" 표시등이 관찰

@@ -1,6 +1,7 @@
 package app.jongpal.jjongpal.auth
 
 import android.os.Build
+import app.jongpal.jjongpal.capture.call.CallRecordingObserver
 import app.jongpal.jjongpal.util.ApiException
 import timber.log.Timber
 import javax.inject.Inject
@@ -10,6 +11,7 @@ import javax.inject.Singleton
 class AuthRepository @Inject constructor(
     private val api: AuthApi,
     private val tokenManager: TokenManager,
+    private val callObserver: CallRecordingObserver,
 ) {
     suspend fun login(email: String, password: String, fcmToken: String? = null): Result<UserPublic> {
         val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".take(120)
@@ -26,6 +28,8 @@ class AuthRepository @Inject constructor(
                 tokenManager.userName = body.user.name
                 tokenManager.userRole = body.user.role
                 tokenManager.deviceId = body.device_id
+                // 로그인 직후엔 밀린 옛 녹음을 바로 올리지 않고 범위를 물어본다
+                callObserver.holdBacklog("login")
                 Result.success(body.user)
             }
         } catch (e: Exception) {

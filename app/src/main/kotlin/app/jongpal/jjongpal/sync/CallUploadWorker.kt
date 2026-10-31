@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import app.jongpal.jjongpal.auth.TokenManager
 import app.jongpal.jjongpal.capture.call.CallNumberResolver
+import app.jongpal.jjongpal.capture.call.CallRecordingObserver
 import app.jongpal.jjongpal.data.local.EventDao
 import app.jongpal.jjongpal.data.remote.EventMetaPatch
 import app.jongpal.jjongpal.data.remote.PcApi
@@ -49,6 +50,7 @@ class CallUploadWorker @AssistedInject constructor(
     private val tokenManager: TokenManager,
     private val moshi: Moshi,
     private val numberResolver: CallNumberResolver,
+    private val observer: CallRecordingObserver,
 ) : CoroutineWorker(ctx, params) {
 
     private val mapAdapter = moshi.adapter<Map<String, Any?>>(MAP_TYPE)
@@ -85,7 +87,8 @@ class CallUploadWorker @AssistedInject constructor(
         if (revived > 0) Timber.i("업로드 실패했던 통화 %d건 재시도 대기로 되돌림", revived)
         if (requeued > 0) Timber.i("requeued %d size-mismatch calls", requeued)
 
-        val pending = eventDao.pendingCallsForUpload()
+        // 밀린 녹음 확인 창이 떠 있는 동안엔 보류 시각 이전 통화는 미뤄 둔다(사용자가 범위를 고르면 정리됨)
+        val pending = eventDao.pendingCallsForUpload(minTs = observer.holdMs())
         if (pending.isEmpty()) return Result.success()
 
         // 토큰 미리 갱신 — 서버는 업로드 본문을 다 받은 뒤에야 인증을 확인한다. 토큰(약 1시간)이 만료돼 있으면
@@ -182,6 +185,8 @@ class CallUploadWorker @AssistedInject constructor(
                     deviceTimestamp = isoFormat.format(Date(event.timestamp)).toRequestBody("text/plain".toMediaTypeOrNull()),
                     deviceId = deviceId?.toRequestBody("text/plain".toMediaTypeOrNull()),
                     durationSec = duration?.toString()?.toRequestBody("text/plain".toMediaTypeOrNull()),
+                    // 사용자가 7일보다 넓은 범위를 직접 골랐을 때만 — 서버는 이 표시 없는 오래된 통화는 건너뜀
+                    backlogOk = if (observer.allowOldUploadNow()) "true".toRequestBody("text/plain".toMediaTypeOrNull()) else null,
                 )
                 if (resp.isSuccessful) {
                     eventDao.updateSync(event.id, "SYNCED", System.currentTimeMillis(), null, 0)

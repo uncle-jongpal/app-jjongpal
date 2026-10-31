@@ -30,3 +30,6 @@ data class EventEntity(
     val phoneClassification: String = "send",
     val phoneClassificationReason: String? = null,
 )
+
+/** 통화 id → 동기화 상태 (밀린 녹음 개수 세기용) */
+data class CallSyncState(val id: String, val syncStatus: String)

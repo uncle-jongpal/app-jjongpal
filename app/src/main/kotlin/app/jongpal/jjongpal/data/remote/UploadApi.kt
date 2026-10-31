@@ -19,6 +19,7 @@ interface UploadApi {
         @Part("device_timestamp") deviceTimestamp: RequestBody? = null,
         @Part("device_id") deviceId: RequestBody? = null,
         @Part("duration_sec") durationSec: RequestBody? = null,
+        @Part("backlog_ok") backlogOk: RequestBody? = null,
     ): Response<UploadAudioResponse>
 }
 
