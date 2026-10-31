@@ -47,3 +47,26 @@ def test_safe_event_id_ok(ev):
 def test_safe_event_id_rejects(ev):
     with pytest.raises(HTTPException):
         safe_event_id(ev)
+
+
+# ── 오래된 통화 건너뛰기(2026-10-31) ──
+from datetime import datetime, timedelta, timezone
+
+from app.upload import initial_status
+
+NOW = datetime(2026, 10, 31, 7, 0, tzinfo=timezone.utc)
+
+
+def test_old_call_skipped_unless_user_chose():
+    old = NOW - timedelta(days=8)
+    assert initial_status(old, False, NOW, 7)[0] == "SKIPPED"
+    assert initial_status(old, True, NOW, 7) == ("PENDING", None)
+
+
+def test_recent_or_unknown_call_pending():
+    assert initial_status(NOW - timedelta(days=6), False, NOW, 7) == ("PENDING", None)
+    assert initial_status(None, False, NOW, 7) == ("PENDING", None)
+
+
+def test_skip_guard_off():
+    assert initial_status(NOW - timedelta(days=100), False, NOW, 0) == ("PENDING", None)

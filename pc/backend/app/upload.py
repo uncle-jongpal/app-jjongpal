@@ -19,7 +19,7 @@
 import logging
 import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import aiofiles
@@ -86,6 +86,7 @@ async def upload_audio(
     device_timestamp: Optional[str] = Form(None),
     device_id: Optional[str] = Form(None),
     duration_sec: Optional[int] = Form(None),
+    backlog_ok: Optional[str] = Form(None),
     authorization: Optional[str] = Header(None),
 ):
     claims = verify_access_from_header(authorization)
@@ -115,6 +116,7 @@ async def upload_audio(
         return await _receive_and_register(
             file, tmp_path, dest_path, ext, event_id, user_id, device_id,
             device_timestamp, duration_sec, ip, ua,
+            backlog_ok=(backlog_ok or "").strip().lower() in ("1", "true", "yes"),
         )
     finally:
         # 어떤 경로로 끝나든(성공·거부·예외) 임시 파일은 남기지 않는다
@@ -149,8 +151,18 @@ def decide_duplicate_action(existing_status: Optional[str], existing_path: Optio
     return "restore"
 
 
+def initial_status(call_ts: Optional[datetime], backlog_ok: bool, now: datetime,
+                   skip_days: int) -> tuple[str, Optional[str]]:
+    """새 통화 녹음의 첫 처리 상태(순수 함수). 오래된 통화는 사용자가 고른 경우만 받아쓰기."""
+    if skip_days <= 0 or backlog_ok or call_ts is None:
+        return "PENDING", None
+    if call_ts < now - timedelta(days=skip_days):
+        return "SKIPPED", f"통화 {skip_days}일 지난 밀린 녹음이라 건너뜀(앱에서 지난 녹음 올리기로 고르면 처리)"
+    return "PENDING", None
+
+
 async def _receive_and_register(file, tmp_path, dest_path, ext, event_id, user_id, device_id,
-                                device_timestamp, duration_sec, ip, ua):
+                                device_timestamp, duration_sec, ip, ua, backlog_ok=False):
     total = 0
     async with aiofiles.open(tmp_path, "wb") as out:
         while True:
@@ -198,6 +210,10 @@ async def _receive_and_register(file, tmp_path, dest_path, ext, event_id, user_i
             log.warning("device_timestamp parse failed: %s (%s)", device_timestamp, e)
             parsed_ts = None
 
+    status, status_note = initial_status(parsed_ts, backlog_ok, datetime.now(timezone.utc), config.OLD_CALL_SKIP_DAYS)
+    if status == "SKIPPED":
+        log.info("오래된 통화 녹음 건너뜀 event=%s ts=%s", event_id, parsed_ts)
+
     dup_action = None
     async with db.pool.acquire() as conn:
         async with conn.transaction():
@@ -217,12 +233,13 @@ async def _receive_and_register(file, tmp_path, dest_path, ext, event_id, user_i
             # (네트워크 불안으로 앱이 성공 응답을 못 받고 재업로드하는 경우 → 받아쓰기/요약/알림 중복 방지)
             audio_row = await conn.fetchrow(
                 """
-                INSERT INTO audio_files (event_id, user_id, file_path, size_bytes, duration_sec, transcript_status)
-                SELECT $1, $2, $3, $4, $5, 'PENDING'
+                INSERT INTO audio_files (event_id, user_id, file_path, size_bytes, duration_sec,
+                                         transcript_status, error_message)
+                SELECT $1, $2, $3, $4, $5, $6, $7
                 WHERE NOT EXISTS (SELECT 1 FROM audio_files WHERE event_id = $1)
                 RETURNING id
                 """,
-                event_id, user_id, dest_path, total, duration_sec,
+                event_id, user_id, dest_path, total, duration_sec, status, status_note,
             )
             if audio_row is not None:
                 # 새 통화 → 임시 파일을 최종 경로로(커밋 전에 옮겨 두어야 워커가 빈 경로를 안 봄.
@@ -253,6 +270,13 @@ async def _receive_and_register(file, tmp_path, dest_path, ext, event_id, user_i
                     os.replace(tmp_path, existing_path)
                     await conn.execute(
                         "UPDATE audio_files SET size_bytes = $2 WHERE id = $1", audio_row["id"], total,
+                    )
+                # 앞서 "오래됨"으로 건너뛴 통화를 사용자가 앱에서 직접 골라 다시 올리면 받아쓰기 대기로 되돌림
+                if (backlog_ok and audio_row["transcript_status"] == "SKIPPED"
+                        and existing_path and os.path.exists(existing_path)):
+                    await conn.execute(
+                        "UPDATE audio_files SET transcript_status = 'PENDING', error_message = NULL WHERE id = $1",
+                        audio_row["id"],
                     )
                 # 'discard' → 아무것도 안 함. 임시 파일은 바깥 finally 에서 지움
                 # (이미 받아쓰기 끝나 원본이 지워진 통화에 고아 파일이 쌓이던 문제 방지)

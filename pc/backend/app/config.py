@@ -34,6 +34,10 @@ ALLOWED_EXT = {".m4a", ".mp3", ".wav", ".ogg", ".amr"}
 MP4_EXT = {".m4a", ".mp4"}
 MAX_BYTES = 200 * 1024 * 1024  # 200MB (nginx client_max_body_size 200M 과 일치)
 MIN_BYTES = 4 * 1024  # 4KB 미만 = 빈/깨진 토막
+# 통화한 지 이 일수가 지난 녹음은 받아쓰기 안 하고 SKIPPED 로 등록(0 = 끔).
+# 오래 꺼져 있던 폰이 다시 로그인하며 밀린 녹음을 통째로 올리는 걸 막는 안전장치(2026-10-31).
+# 앱에서 사용자가 "30일·전체"를 직접 고른 업로드는 backlog_ok=true 로 와서 통과.
+OLD_CALL_SKIP_DAYS = int(os.environ.get("OLD_CALL_SKIP_DAYS", "7"))
 
 # ===== API 문서(/docs, /redoc, /openapi.json) =====
 # 기본 꺼짐(공개 인터넷에 경로 목록·스키마 노출 방지). 개발 때만 ENABLE_API_DOCS=true.
